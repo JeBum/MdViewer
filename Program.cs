@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Drawing.Text;
+using System.IO.Pipes;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -19,12 +20,121 @@ enum AppTheme { Sogang, Albatross }
 
 static class Program
 {
+    const string MutexName = "MDviewer_SingleInstance_Mutex_2026";
+    const string PipeName = "MDviewer_SingleInstance_Pipe_2026";
+
     [STAThread]
     static void Main(string[] args)
     {
+        bool isNew;
+        using var mutex = new Mutex(true, MutexName, out isNew);
+
+        if (!isNew)
+        {
+            SendArgsToRunningInstance(args);
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         Brand.Init();
-        Application.Run(new MainForm(args));
+
+        using var cts = new CancellationTokenSource();
+        MainForm? form = null;
+
+        StartPipeServer(cts.Token, () => form);
+
+        try
+        {
+            form = new MainForm(args);
+            Application.Run(form);
+        }
+        finally
+        {
+            cts.Cancel();
+        }
+    }
+
+    static void SendArgsToRunningInstance(string[] args)
+    {
+        try
+        {
+            using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
+            client.Connect(1500);
+            using var writer = new StreamWriter(client, Encoding.UTF8) { AutoFlush = true };
+            foreach (var a in args)
+            {
+                if (!string.IsNullOrWhiteSpace(a))
+                    writer.WriteLine(Path.GetFullPath(a));
+            }
+        }
+        catch { }
+    }
+
+    static void StartPipeServer(CancellationToken token, Func<MainForm?> getForm)
+    {
+        Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    using var server = new NamedPipeServerStream(
+                        PipeName,
+                        PipeDirection.In,
+                        NamedPipeServerStream.MaxAllowedServerInstances,
+                        PipeTransmissionMode.Byte,
+                        PipeOptions.Asynchronous);
+
+                    await server.WaitForConnectionAsync(token);
+
+                    using var reader = new StreamReader(server, Encoding.UTF8);
+                    var files = new List<string>();
+                    string? line;
+                    while ((line = await reader.ReadLineAsync()) != null)
+                    {
+                        if (!string.IsNullOrWhiteSpace(line))
+                            files.Add(line);
+                    }
+
+                    var form = getForm();
+                    if (form != null)
+                    {
+                        if (form.IsHandleCreated)
+                        {
+                            form.BeginInvoke(() =>
+                            {
+                                foreach (var f in files)
+                                {
+                                    if (File.Exists(f) && MainForm.IsMd(f))
+                                        form.OpenFile(f);
+                                }
+                                form.BringToForeground();
+                            });
+                        }
+                        else
+                        {
+                            form.HandleCreated += (_, _) =>
+                            {
+                                foreach (var f in files)
+                                {
+                                    if (File.Exists(f) && MainForm.IsMd(f))
+                                        form.OpenFile(f);
+                                }
+                                form.BringToForeground();
+                            };
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                    await Task.Delay(200, token).ConfigureAwait(false);
+                }
+            }
+        }, token);
     }
 }
 
@@ -43,6 +153,16 @@ sealed class MainForm : Form, IMessageFilter
     readonly Label _helpMouse = new();
     readonly Label _helpMouseTitle = new();
     readonly ContextMenuStrip _menu = new();
+    ToolStripMenuItem? _miSave;
+    ToolStripMenuItem? _miDocx;
+    ToolStripMenuItem? _miClose;
+    ToolStripMenuItem? _miCloseAll;
+    ToolStripMenuItem? _miCloseOthers;
+    ToolStripMenuItem? _miFind;
+    ToolStripMenuItem? _miHighlight;
+    ToolStripMenuItem? _miEdit;
+    ToolStripMenuItem? _miVert;
+    ToolStripMenuItem? _miHorz;
     ToolStripMenuItem? _miSogang;
     ToolStripMenuItem? _miAlba;
     bool _menuBusy;
@@ -93,6 +213,11 @@ sealed class MainForm : Form, IMessageFilter
             if (e.Control && e.KeyCode == Keys.S && !e.Shift) Current?.Save();
             if (e.Control && e.Shift && e.KeyCode == Keys.S) Current?.SaveDocx();
             if (e.KeyCode == Keys.F5) Current?.Reload();
+            if (e.Shift && e.KeyCode == Keys.F8)
+            {
+                e.Handled = true;
+                Current?.AddSelectedToHighlight();
+            }
         };
 
         _tabs.SelectedIndexChanged += (_, _) =>
@@ -139,7 +264,7 @@ sealed class MainForm : Form, IMessageFilter
             using var bar = new SolidBrush(Brand.Cardinal);
             g.FillRectangle(bar, r.X + 8, r.Bottom - 3, r.Width - 16, 3);
         }
-        var font = Brand.Ui(7f, on ? FontStyle.Bold : FontStyle.Regular);
+        var font = Brand.Ui(8f, on ? FontStyle.Bold : FontStyle.Regular);
         TextRenderer.DrawText(
             g, page.Text, font,
             new Rectangle(r.X + 6, r.Y, r.Width - 12, r.Height - 2),
@@ -153,6 +278,26 @@ sealed class MainForm : Form, IMessageFilter
         const int WmMouseWheel = 0x020A;
         const int WmMouseHWheel = 0x020E;
         const int WmContextMenu = 0x007B;
+        const int WmLButtonDown = 0x0201;
+        const int WmNCLButtonDown = 0x00A1;
+        const int WmRButtonDown = 0x0204;
+        const int WmNCRButtonDown = 0x00A4;
+        const int WmMButtonDown = 0x0207;
+        const int WmNCMButtonDown = 0x00A7;
+
+        if (_menu.Visible)
+        {
+            if (m.Msg == WmLButtonDown || m.Msg == WmNCLButtonDown ||
+                m.Msg == WmRButtonDown || m.Msg == WmNCRButtonDown ||
+                m.Msg == WmMButtonDown || m.Msg == WmNCMButtonDown)
+            {
+                if (!_menu.Bounds.Contains(Cursor.Position))
+                {
+                    _menu.Close();
+                }
+            }
+        }
+
         if (m.Msg == WmContextMenu && Current != null)
         {
             ShowDocMenu(this);
@@ -161,8 +306,8 @@ sealed class MainForm : Form, IMessageFilter
         if (m.Msg != WmMouseWheel && m.Msg != WmMouseHWheel) return false;
         long wp = m.WParam.ToInt64();
         int keys = (int)(wp & 0xFFFF);
-        bool ctrl = (keys & 0x0008) != 0 || (ModifierKeys & Keys.Control) != 0;
-        if (!ctrl) return false;
+        bool zoomCtrl = (keys & 0x0008) != 0 || (ModifierKeys & Keys.Control) != 0;
+        if (!zoomCtrl) return false;
         int delta = unchecked((short)((wp >> 16) & 0xFFFF));
         Current?.AdjustZoom(delta > 0 ? 0.08 : -0.08);
         return true;
@@ -224,7 +369,11 @@ sealed class MainForm : Form, IMessageFilter
             _logoFooter.Image = footer;
             _logoFooter.Size = new Size(footer.Width, footer.Height);
         }
-        _intro.Text = "26.09.10 : 데이터 엔지니어링 프로그래밍 수업 md file viewer";
+        var buildDate = Assembly.GetExecutingAssembly()
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .First(a => a.Key == "BuildDate").Value;
+        _intro.Text = "26.09.10 : 데이터 엔지니어링 프로그래밍 수업 md file viewer\n" +
+            $"last build : {buildDate}";
         _intro.AutoSize = true;
         _intro.Location = new Point(28, 10);
         _intro.Anchor = AnchorStyles.Top | AnchorStyles.Left;
@@ -249,6 +398,8 @@ sealed class MainForm : Form, IMessageFilter
             "- Ctrl + S  저장\n" +
             "- Ctrl + Shift + S  Word로 저장\n" +
             "- Ctrl + W  탭 닫기\n" +
+            "- Ctrl + F  단어 검색\n" +
+            "- Shift + F8  단어 강조\n" +
             "- F5  다시 읽기\n" +
             "- Ctrl + 휠  확대/축소";
         _help.AutoSize = true;
@@ -268,7 +419,8 @@ sealed class MainForm : Form, IMessageFilter
             "- .md 끌어다 놓기  새 탭\n" +
             "- 오른쪽 클릭  메뉴\n" +
             "- 편집 / 분할 / 테마\n" +
-            "- 탭 제목 클릭  문서 전환";
+            "- 탭 제목 클릭  문서 전환\n" +
+            "- 탭 휠클릭  탭 닫기";
         _helpMouse.AutoSize = true;
         _helpMouse.BackColor = Color.Transparent;
         _helpMouse.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
@@ -390,23 +542,8 @@ sealed class MainForm : Form, IMessageFilter
 
             Native.NotifyAssocChanged();
 
-            var ask = MessageBox.Show(this,
-                "MDviewer를 .md 연결 프로그램으로 등록했습니다.\n\n" +
-                "Windows 11은 기본 앱을 직접 한 번 지정해야 합니다.\n" +
-                "설정 창에서 파일 형식 .md → MDviewer를 선택하세요.\n\n" +
-                "기본 앱 설정을 열까요?",
-                "MDviewer", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
-            if (ask == DialogResult.Yes)
-            {
-                try
-                {
-                    Process.Start(new ProcessStartInfo("ms-settings:defaultapps") { UseShellExecute = true });
-                }
-                catch
-                {
-                    Process.Start(new ProcessStartInfo("control", "/name Microsoft.DefaultPrograms") { UseShellExecute = true });
-                }
-            }
+            using var dlg = new AssocGuideDialog();
+            dlg.ShowDialog(this);
         }
         catch (Exception ex)
         {
@@ -423,41 +560,57 @@ sealed class MainForm : Form, IMessageFilter
         _menu.FontChanged += (_, _) => ApplyMenuFont();
         _menu.Items.Add("New", null, (_, _) => NewFile());
         _menu.Items.Add("Open", null, (_, _) => OpenDialog());
-        _menu.Items.Add("Save", null, (_, _) => Current?.Save());
-        _menu.Items.Add("Word로 저장", null, (_, _) => Current?.SaveDocx());
+        _miSave = new ToolStripMenuItem("Save", null, (_, _) => Current?.Save());
+        _miDocx = new ToolStripMenuItem("Word로 저장", null, (_, _) => Current?.SaveDocx());
+        _menu.Items.Add(_miSave);
+        _menu.Items.Add(_miDocx);
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add("전체 닫기", null, (_, _) => CloseAll());
-        _menu.Items.Add("다른 문서 닫기", null, (_, _) =>
+        _miClose = new ToolStripMenuItem("닫기", null, (_, _) => CloseCurrent());
+        _miCloseAll = new ToolStripMenuItem("전체 닫기", null, (_, _) => CloseAll());
+        _miCloseOthers = new ToolStripMenuItem("다른 문서 닫기", null, (_, _) =>
         {
             if (_tabs.SelectedTab != null) CloseOthers(_tabs.SelectedTab);
         });
+        _menu.Items.Add(_miClose);
+        _menu.Items.Add(_miCloseAll);
+        _menu.Items.Add(_miCloseOthers);
         _menu.Items.Add(new ToolStripSeparator());
-        var edit = new ToolStripMenuItem("편집 모드") { CheckOnClick = true };
-        var vert = new ToolStripMenuItem("세로 분할") { CheckOnClick = true };
-        var horz = new ToolStripMenuItem("가로 분할") { CheckOnClick = true };
-        edit.CheckedChanged += (_, _) =>
+        _miFind = new ToolStripMenuItem("검색 (Ctrl+F)", null, (_, _) => Current?.TriggerFind());
+        _miHighlight = new ToolStripMenuItem("강조 키워드 (Shift+F8)") { CheckOnClick = true };
+        _miHighlight.CheckedChanged += (_, _) =>
         {
             if (_menuBusy || Current == null) return;
-            Current.EditMode = edit.Checked;
-            if (edit.Checked && Current.Split == SplitMode.None)
+            Current.HighlightBarVisible = _miHighlight.Checked;
+        };
+        _menu.Items.Add(_miFind);
+        _menu.Items.Add(_miHighlight);
+        _menu.Items.Add(new ToolStripSeparator());
+        _miEdit = new ToolStripMenuItem("편집 모드") { CheckOnClick = true };
+        _miVert = new ToolStripMenuItem("세로 분할") { CheckOnClick = true };
+        _miHorz = new ToolStripMenuItem("가로 분할") { CheckOnClick = true };
+        _miEdit.CheckedChanged += (_, _) =>
+        {
+            if (_menuBusy || Current == null) return;
+            Current.EditMode = _miEdit.Checked;
+            if (_miEdit.Checked && Current.Split == SplitMode.None)
                 Current.Split = SplitMode.Vertical;
-            if (!edit.Checked && Current.Split != SplitMode.None)
+            if (!_miEdit.Checked && Current.Split != SplitMode.None)
                 Current.RefreshPreview();
             SyncTitle();
         };
-        vert.CheckedChanged += (_, _) =>
+        _miVert.CheckedChanged += (_, _) =>
         {
             if (_menuBusy || Current == null) return;
-            Current.Split = vert.Checked ? SplitMode.Vertical : SplitMode.None;
+            Current.Split = _miVert.Checked ? SplitMode.Vertical : SplitMode.None;
         };
-        horz.CheckedChanged += (_, _) =>
+        _miHorz.CheckedChanged += (_, _) =>
         {
             if (_menuBusy || Current == null) return;
-            Current.Split = horz.Checked ? SplitMode.Horizontal : SplitMode.None;
+            Current.Split = _miHorz.Checked ? SplitMode.Horizontal : SplitMode.None;
         };
-        _menu.Items.Add(edit);
-        _menu.Items.Add(vert);
-        _menu.Items.Add(horz);
+        _menu.Items.Add(_miEdit);
+        _menu.Items.Add(_miVert);
+        _menu.Items.Add(_miHorz);
         _menu.Items.Add(new ToolStripSeparator());
         _miSogang = new ToolStripMenuItem("서강 테마") { CheckOnClick = true };
         _miAlba = new ToolStripMenuItem("알바트로스 테마") { CheckOnClick = true };
@@ -481,21 +634,28 @@ sealed class MainForm : Form, IMessageFilter
             SizeMenu();
             _menuBusy = true;
             var has = Current != null;
-            _menu.Items[2].Enabled = has;
-            _menu.Items[3].Enabled = has;
-            _menu.Items[5].Enabled = has;
-            _menu.Items[6].Enabled = has && _tabs.TabCount > 1;
-            edit.Enabled = has;
-            vert.Enabled = has;
-            horz.Enabled = has;
+            if (_miSave != null) _miSave.Enabled = has;
+            if (_miDocx != null) _miDocx.Enabled = has;
+            if (_miClose != null) _miClose.Enabled = has;
+            if (_miCloseAll != null) _miCloseAll.Enabled = _tabs.TabCount > 0;
+            if (_miCloseOthers != null) _miCloseOthers.Enabled = has && _tabs.TabCount > 1;
+            if (_miFind != null) _miFind.Enabled = has;
+            if (_miHighlight != null)
+            {
+                _miHighlight.Enabled = has;
+                if (has) _miHighlight.Checked = Current!.HighlightBarVisible;
+            }
+            if (_miEdit != null) _miEdit.Enabled = has;
+            if (_miVert != null) _miVert.Enabled = has;
+            if (_miHorz != null) _miHorz.Enabled = has;
             if (has)
             {
-                edit.Checked = Current!.EditMode;
-                vert.Checked = Current.Split == SplitMode.Vertical;
-                horz.Checked = Current.Split == SplitMode.Horizontal;
+                if (_miEdit != null) _miEdit.Checked = Current!.EditMode;
+                if (_miVert != null) _miVert.Checked = Current!.Split == SplitMode.Vertical;
+                if (_miHorz != null) _miHorz.Checked = Current!.Split == SplitMode.Horizontal;
             }
-            _miSogang!.Checked = Brand.Theme == AppTheme.Sogang;
-            _miAlba!.Checked = Brand.Theme == AppTheme.Albatross;
+            if (_miSogang != null) _miSogang.Checked = Brand.Theme == AppTheme.Sogang;
+            if (_miAlba != null) _miAlba.Checked = Brand.Theme == AppTheme.Albatross;
             _menuBusy = false;
         };
     }
@@ -583,6 +743,9 @@ sealed class MainForm : Form, IMessageFilter
         _menu.AutoSize = false;
         _menu.Width = inner + 28;
     }
+
+    public bool IsMenuVisible => _menu.Visible;
+    public void CloseMenu() => _menu.Close();
 
     public void ShowDocMenu(Control c)
     {
@@ -719,6 +882,16 @@ sealed class MainForm : Form, IMessageFilter
             Current.HostPage.Text = name;
     }
 
+    public void BringToForeground()
+    {
+        if (WindowState == FormWindowState.Minimized)
+            WindowState = FormWindowState.Normal;
+        Native.ShowWindow(Handle, 9);
+        Native.SetForegroundWindow(Handle);
+        Activate();
+        BringToFront();
+    }
+
     public static bool IsMd(string path) =>
         path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
         path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase) ||
@@ -734,9 +907,116 @@ sealed class MainForm : Form, IMessageFilter
     }
 }
 
+sealed class AssocGuideDialog : Form
+{
+    public AssocGuideDialog()
+    {
+        Text = "MDviewer - .md 연결 프로그램 등록 안내";
+        Width = 590;
+        Height = 440;
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        BackColor = Brand.Paper;
+        Font = Brand.Ui(9f);
+
+        var topPanel = new Panel { Dock = DockStyle.Top, Height = 95, Padding = new Padding(20, 16, 20, 8), BackColor = Brand.Wash };
+        var lblTitle = new Label
+        {
+            Text = "MDviewer를 .md 연결 프로그램으로 등록했습니다.",
+            Dock = DockStyle.Top,
+            Height = 26,
+            Font = Brand.Ui(11f, FontStyle.Bold),
+            ForeColor = Brand.Theme == AppTheme.Sogang ? Brand.Cardinal : Color.FromArgb(20, 20, 20)
+        };
+        var lblDesc = new Label
+        {
+            Text = "Windows 11은 기본 앱 설정을 사용자가 한 번 직접 지정해야 합니다.\n아래 가이드 화면처럼 기본 앱 설정에서 .md 검색 후 MDviewer를 선택하세요.",
+            Dock = DockStyle.Fill,
+            Font = Brand.Ui(9f),
+            ForeColor = Brand.Ink
+        };
+        topPanel.Controls.Add(lblDesc);
+        topPanel.Controls.Add(lblTitle);
+
+        var pic = new PictureBox
+        {
+            Dock = DockStyle.Fill,
+            SizeMode = PictureBoxSizeMode.Zoom,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.White
+        };
+        var img = Brand.ResImage("스크린샷_기본앱등록.png") ?? Brand.ResImage("assoc_guide.png");
+        if (img != null) pic.Image = img;
+
+        var centerPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(20, 10, 20, 10) };
+        centerPanel.Controls.Add(pic);
+
+        var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 56, Padding = new Padding(20, 10, 20, 12), BackColor = Brand.Wash };
+        var btnOpen = new Button
+        {
+            Text = "기본 앱 설정 열기",
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowOnly,
+            Width = 180,
+            Height = 34,
+            Dock = DockStyle.Right,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Brand.Theme == AppTheme.Sogang ? Brand.Cardinal : Color.FromArgb(30, 30, 30),
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand,
+            Font = Brand.Ui(9.5f, FontStyle.Bold)
+        };
+        btnOpen.FlatAppearance.BorderSize = 0;
+        btnOpen.Click += (_, _) =>
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo("ms-settings:defaultapps") { UseShellExecute = true });
+            }
+            catch
+            {
+                Process.Start(new ProcessStartInfo("control", "/name Microsoft.DefaultPrograms") { UseShellExecute = true });
+            }
+        };
+
+        var btnClose = new Button
+        {
+            Text = "닫기",
+            Width = 80,
+            Height = 34,
+            Dock = DockStyle.Right,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(230, 230, 230),
+            ForeColor = Color.FromArgb(40, 40, 40),
+            Cursor = Cursors.Hand,
+            Font = Brand.Ui(9f)
+        };
+        btnClose.FlatAppearance.BorderSize = 0;
+        btnClose.Click += (_, _) => Close();
+
+        var btnSpace = new Panel { Dock = DockStyle.Right, Width = 10 };
+
+        bottomPanel.Controls.Add(btnOpen);
+        bottomPanel.Controls.Add(btnSpace);
+        bottomPanel.Controls.Add(btnClose);
+
+        Controls.Add(centerPanel);
+        Controls.Add(topPanel);
+        Controls.Add(bottomPanel);
+        AcceptButton = btnOpen;
+        CancelButton = btnClose;
+    }
+}
+
 sealed class FileTab : Panel
 {
     readonly SplitContainer _split = new();
+    readonly Panel _hlBar = new() { Dock = DockStyle.Top, Height = 28, Padding = new Padding(8, 3, 8, 3), Visible = false };
+    readonly Label _lblHl = new() { Text = "강조키워드:", AutoSize = true, Dock = DockStyle.Left, Padding = new Padding(0, 3, 6, 0) };
+    readonly TextBox _txtHl = new() { Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle };
     readonly Panel _editPane = new() { Dock = DockStyle.Fill };
     readonly Panel _gutter = new();
     readonly RichTextBox _text = new();
@@ -777,6 +1057,25 @@ sealed class FileTab : Panel
     public event Action? DirtyChanged;
     public event Action<string>? OpenRequested;
 
+    public bool HighlightBarVisible
+    {
+        get => _hlBar.Visible;
+        set
+        {
+            _hlBar.Visible = value;
+            if (value)
+            {
+                _txtHl.Focus();
+                _txtHl.SelectAll();
+            }
+            else
+            {
+                if (_editMode) _text.Focus();
+                else _web.Focus();
+            }
+        }
+    }
+
     public bool EditMode
     {
         get => _editMode;
@@ -806,6 +1105,32 @@ sealed class FileTab : Panel
         Dock = DockStyle.Fill;
         BackColor = Brand.Wash;
 
+        _lblHl.Font = Brand.Ui(8.5f, FontStyle.Bold);
+        _lblHl.ForeColor = Color.FromArgb(80, 80, 80);
+        _txtHl.Font = Brand.Ui(8.5f);
+        _txtHl.BackColor = Color.White;
+        _txtHl.ForeColor = Color.FromArgb(40, 40, 40);
+        _txtHl.TextChanged += (_, _) => ApplyHighlightKeywords();
+        _txtHl.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                ApplyHighlightKeywords();
+            }
+        };
+
+        _hlBar.BackColor = Color.FromArgb(248, 248, 249);
+        _hlBar.Paint += (_, e) =>
+        {
+            using var p = new Pen(Color.FromArgb(222, 222, 225));
+            e.Graphics.DrawLine(p, 0, _hlBar.Height - 1, _hlBar.Width, _hlBar.Height - 1);
+        };
+
+        _hlBar.Controls.Add(_txtHl);
+        _hlBar.Controls.Add(_lblHl);
+
         _gutter.Dock = DockStyle.Left;
         _gutter.Width = 52;
         _gutter.BackColor = Color.FromArgb(240, 240, 241);
@@ -827,6 +1152,15 @@ sealed class FileTab : Panel
         _text.DragEnter += OnEditorDrag;
         _text.DragOver += OnEditorDrag;
         _text.DragDrop += OnEditorDrop;
+        _text.KeyDown += (_, e) =>
+        {
+            if (e.Shift && e.KeyCode == Keys.F8)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                AddSelectedToHighlight();
+            }
+        };
         _text.VScroll += (_, _) =>
         {
             _gutter.Invalidate();
@@ -853,6 +1187,8 @@ sealed class FileTab : Panel
         _split.Dock = DockStyle.Fill;
         _split.SplitterWidth = 6;
         Controls.Add(_split);
+        Controls.Add(_hlBar);
+        _hlBar.BringToFront();
 
         _previewTick.Tick += (_, _) =>
         {
@@ -892,11 +1228,15 @@ sealed class FileTab : Panel
         _viewPane.ContextMenuStrip = menu;
         _viewPane2.ContextMenuStrip = menu;
         _split.ContextMenuStrip = menu;
+        _hlBar.ContextMenuStrip = menu;
+        _lblHl.ContextMenuStrip = menu;
+        _txtHl.ContextMenuStrip = menu;
     }
 
     public void ApplyChrome()
     {
         BackColor = Brand.Wash;
+        _hlBar.BackColor = Brand.Wash;
         _editPane.BackColor = Brand.Wash;
         _gutter.BackColor = Color.FromArgb(240, 240, 241);
         _text.ForeColor = Brand.Ink;
@@ -987,14 +1327,19 @@ sealed class FileTab : Panel
         core.NavigationCompleted += (_, _) =>
         {
             if (_editMode) BeginInvoke(SyncEditorToWeb);
+            BeginInvoke(ApplyHighlightKeywords);
         };
         core.NavigationStarting += (_, e) =>
         {
-            if (TryParseDropped(e.Uri, out var md))
-            {
-                e.Cancel = true;
-                OpenRequested?.Invoke(md);
-            }
+            if (string.IsNullOrWhiteSpace(e.Uri)) return;
+            if (e.Uri.Equals("about:blank", StringComparison.OrdinalIgnoreCase) ||
+                e.Uri.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase) ||
+                e.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+                e.Uri.StartsWith("https://mdviewer.local/", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            e.Cancel = true;
+            TryOpenUri(e.Uri);
         };
         core.DownloadStarting += (_, e) =>
         {
@@ -1011,6 +1356,43 @@ sealed class FileTab : Panel
             if (string.IsNullOrEmpty(raw)) return;
             try
             {
+                if (raw.Contains("\"t\":\"esc\"", StringComparison.Ordinal))
+                {
+                    BeginInvoke(() =>
+                    {
+                        if (FindForm() is MainForm f && f.IsMenuVisible) f.CloseMenu();
+                    });
+                    return;
+                }
+                if (raw.Contains("\"t\":\"shiftF8\"", StringComparison.Ordinal))
+                {
+                    var sel = "";
+                    var sIdx = raw.IndexOf("\"sel\":", StringComparison.Ordinal);
+                    if (sIdx >= 0)
+                    {
+                        var restSel = raw[(sIdx + 6)..].Trim();
+                        if (restSel.StartsWith('"'))
+                        {
+                            var end = restSel.IndexOf('"', 1);
+                            if (end > 1) sel = restSel[1..end];
+                        }
+                    }
+                    BeginInvoke(() =>
+                    {
+                        if (string.IsNullOrEmpty(sel)) AddSelectedToHighlight();
+                        else AddHighlightKeyword(Regex.Unescape(sel));
+                    });
+                    return;
+                }
+                if (raw.Contains("\"t\":\"pointerdown\"", StringComparison.Ordinal))
+                {
+                    BeginInvoke(() =>
+                    {
+                        if (FindForm() is MainForm f && f.IsMenuVisible)
+                            f.CloseMenu();
+                    });
+                    return;
+                }
                 if (raw.Contains("\"t\":\"ctx\"", StringComparison.Ordinal))
                 {
                     BeginInvoke(() =>
@@ -1158,10 +1540,130 @@ sealed class FileTab : Panel
         return MainForm.IsMdPublic(path) && File.Exists(path);
     }
 
+    bool TryResolveRelativeMd(string uri, out string resolved)
+    {
+        resolved = "";
+        if (string.IsNullOrWhiteSpace(uri) || string.IsNullOrEmpty(Path)) return false;
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(Path);
+            if (string.IsNullOrEmpty(dir)) return false;
+            var raw = Uri.UnescapeDataString(uri.Trim().Trim('"'));
+            if (raw.StartsWith("about:blank/", StringComparison.OrdinalIgnoreCase))
+                raw = raw["about:blank/".Length..];
+            if (Uri.TryCreate(raw, UriKind.Absolute, out var u) && u.IsFile)
+                raw = u.LocalPath;
+
+            var comb = System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, raw));
+            if (File.Exists(comb) && MainForm.IsMdPublic(comb))
+            {
+                resolved = comb;
+                return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    public static void OpenExternalUrl(string? uri)
+    {
+        if (string.IsNullOrWhiteSpace(uri)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+        }
+        catch { }
+    }
+
     void TryOpenUri(string uri)
     {
+        if (string.IsNullOrWhiteSpace(uri)) return;
         if (TryParseDropped(uri, out var md))
+        {
             OpenRequested?.Invoke(md);
+            return;
+        }
+        if (TryResolveRelativeMd(uri, out var relMd))
+        {
+            OpenRequested?.Invoke(relMd);
+            return;
+        }
+        OpenExternalUrl(uri);
+    }
+
+    public async void AddSelectedToHighlight()
+    {
+        if (_editMode && _text.Focused && !string.IsNullOrWhiteSpace(_text.SelectedText))
+        {
+            AddHighlightKeyword(_text.SelectedText.Trim());
+            return;
+        }
+        if (_web.CoreWebView2 != null)
+        {
+            try
+            {
+                var res = await _web.CoreWebView2.ExecuteScriptAsync("window.getSelection() ? window.getSelection().toString() : ''");
+                var sel = UnquoteJs(res).Trim();
+                if (!string.IsNullOrEmpty(sel))
+                {
+                    AddHighlightKeyword(sel);
+                    return;
+                }
+            }
+            catch { }
+        }
+        if (!string.IsNullOrWhiteSpace(_text.SelectedText))
+        {
+            AddHighlightKeyword(_text.SelectedText.Trim());
+        }
+    }
+
+    static string UnquoteJs(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        s = s.Trim();
+        if (s.StartsWith('"') && s.EndsWith('"') && s.Length >= 2)
+            s = s[1..^1];
+        return Regex.Unescape(s);
+    }
+
+    public void AddHighlightKeyword(string word)
+    {
+        if (string.IsNullOrWhiteSpace(word)) return;
+        word = word.Trim();
+        _hlBar.Visible = true;
+        var current = _txtHl.Text.Trim();
+        var existing = current.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (!existing.Any(x => string.Equals(x, word, StringComparison.OrdinalIgnoreCase)))
+        {
+            _txtHl.Text = string.IsNullOrEmpty(current) ? word : current + " " + word;
+        }
+        _txtHl.Focus();
+        _txtHl.SelectionStart = _txtHl.TextLength;
+        _txtHl.SelectionLength = 0;
+        ApplyHighlightKeywords();
+    }
+
+    public void TriggerFind()
+    {
+        if (_editMode) _text.Focus();
+        else _web.Focus();
+        SendKeys.Send("^f");
+    }
+
+    public void ApplyHighlightKeywords()
+    {
+        if (!_ready) return;
+        var kw = _txtHl.Text.Trim();
+        var list = kw.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var json = System.Text.Json.JsonSerializer.Serialize(list);
+        var js = "applyHighlightKeywords(" + json + ");";
+        try
+        {
+            if (_web.CoreWebView2 != null) _ = _web.CoreWebView2.ExecuteScriptAsync(js);
+            if (_web2.CoreWebView2 != null) _ = _web2.CoreWebView2.ExecuteScriptAsync(js);
+        }
+        catch { }
     }
 
     static void Host(Control parent, Control child)
@@ -1445,7 +1947,9 @@ sealed class FileTab : Panel
         "<!doctype html><html><head><meta charset='utf-8'/>" +
         "<meta name='viewport' content='width=device-width, initial-scale=1'/>" +
         "<style>@font-face{font-family:'SogangUni';src:url('https://mdviewer.local/sogang.ttf') format('truetype');}" +
-        Brand.PreviewCss + "</style></head><body><article class='md'>" +
+        Brand.PreviewCss +
+        "mark.md-kw-hl{background-color:#ffff00 !important;color:#000000 !important;border-radius:2px;padding:0 2px;}" +
+        "</style></head><body><article class='md'>" +
         body + "</article>" + ScrollScript + "</body></html>";
 
     const string ScrollScript =
@@ -1459,8 +1963,53 @@ sealed class FileTab : Panel
         "return best?parseInt(best.getAttribute('data-src-line'),10):1;}" +
         "window.addEventListener('scroll',()=>{if(__lock)return;" +
         "chrome.webview.postMessage(JSON.stringify({t:'line',ln:srcLineAtTop()}));});" +
+        "window.addEventListener('pointerdown',e=>{chrome.webview.postMessage(JSON.stringify({t:'pointerdown'}));},true);" +
         "window.addEventListener('contextmenu',e=>{e.preventDefault();chrome.webview.postMessage(JSON.stringify({t:'ctx'}));});" +
         "window.addEventListener('wheel',e=>{if(e.ctrlKey){e.preventDefault();e.stopPropagation();chrome.webview.postMessage(JSON.stringify({t:'zoom',d:e.deltaY<0?1:-1}));}},{passive:false});" +
+        "window.addEventListener('keydown',e=>{" +
+        "if(e.key==='Escape'){chrome.webview.postMessage(JSON.stringify({t:'esc'}));}" +
+        "else if(e.shiftKey&&e.key==='F8'){" +
+        "e.preventDefault();" +
+        "const sel=window.getSelection()?window.getSelection().toString().trim():'';" +
+        "chrome.webview.postMessage(JSON.stringify({t:'shiftF8',sel:sel}));}" +
+        "});" +
+        "function clearKeywordHighlights(root){" +
+        "root.querySelectorAll('mark.md-kw-hl').forEach(m=>{" +
+        "const p=m.parentNode;if(p){p.replaceChild(document.createTextNode(m.textContent),m);p.normalize();}" +
+        "});}" +
+        "function escapeRegExp(s){return s.replace(/[-[\\]{}()*+?.,\\\\^$|#\\s]/g,'\\\\$&');}" +
+        "function applyHighlightKeywords(keywords){" +
+        "const art=document.querySelector('.md')||document.body;" +
+        "clearKeywordHighlights(art);" +
+        "if(!keywords||!Array.isArray(keywords)||keywords.length===0)return;" +
+        "const valid=keywords.map(k=>(k||'').trim()).filter(k=>k.length>0);" +
+        "if(valid.length===0)return;" +
+        "const pattern='('+valid.map(escapeRegExp).join('|')+')';" +
+        "const rx=new RegExp(pattern,'gi');" +
+        "const walker=document.createTreeWalker(art,NodeFilter.SHOW_TEXT,{" +
+        "acceptNode:n=>{" +
+        "if(!n.nodeValue||!rx.test(n.nodeValue))return NodeFilter.FILTER_REJECT;" +
+        "const p=n.parentElement;" +
+        "if(p&&(p.tagName==='SCRIPT'||p.tagName==='STYLE'||p.classList.contains('md-kw-hl')))return NodeFilter.FILTER_REJECT;" +
+        "return NodeFilter.FILTER_ACCEPT;}" +
+        "});" +
+        "const nds=[];let cur;" +
+        "while(cur=walker.nextNode())nds.push(cur);" +
+        "for(const node of nds){" +
+        "const text=node.nodeValue;" +
+        "rx.lastIndex=0;let last=0;let match;" +
+        "const frag=document.createDocumentFragment();let matched=false;" +
+        "while((match=rx.exec(text))!==null){" +
+        "matched=true;" +
+        "if(match.index>last)frag.appendChild(document.createTextNode(text.substring(last,match.index)));" +
+        "const mark=document.createElement('mark');" +
+        "mark.className='md-kw-hl';" +
+        "mark.textContent=match[0];" +
+        "frag.appendChild(mark);" +
+        "last=match.index+match[0].length;}" +
+        "if(matched){if(last<text.length)frag.appendChild(document.createTextNode(text.substring(last)));" +
+        "if(node.parentNode)node.parentNode.replaceChild(frag,node);}" +
+        "}}" +
         "</script>";
 
 }
@@ -1569,7 +2118,6 @@ static class Brand
         catch { }
     }
 
-    static Font? _menuFont;
     static Font? _menuSogang;
     static Font? _menuAlba;
     public static Font MenuFont => Theme == AppTheme.Sogang
@@ -1606,6 +2154,15 @@ static class Brand
         {
             using var s = OpenRes(file);
             if (s != null) return Image.FromStream(s);
+        }
+        catch { }
+        try
+        {
+            if (File.Exists(file)) return Image.FromFile(file);
+            var p = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, file);
+            if (File.Exists(p)) return Image.FromFile(p);
+            var pAssets = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", file);
+            if (File.Exists(pAssets)) return Image.FromFile(pAssets);
         }
         catch { }
         return null;
@@ -1651,6 +2208,8 @@ static class Brand
 static class Native
 {
     public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("shell32.dll")] public static extern void DragAcceptFiles(IntPtr hWnd, bool fAccept);
     [DllImport("shell32.dll")] public static extern void DragFinish(IntPtr hDrop);
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWndParent, EnumProc lpEnumFunc, IntPtr lParam);

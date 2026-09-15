@@ -11,11 +11,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <Version>1.3.0</Version>
+    <BuildDate>$([System.DateTime]::Now.ToString("yyyy.MM.dd"))</BuildDate>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
     <DefaultItemExcludes>$(DefaultItemExcludes);setup_proj\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
+    <AssemblyMetadata Include="BuildDate" Value="$(BuildDate)" />
     <Compile Remove="setup_proj\**" />
     <EmbeddedResource Remove="setup_proj\**" />
     <None Remove="setup_proj\**" />
@@ -28,6 +30,8 @@
     <EmbeddedResource Include="assets\albatross.png" />
     <EmbeddedResource Include="assets\campus.png" />
     <EmbeddedResource Include="assets\campus_light.png" />
+    <EmbeddedResource Include="assets\assoc_guide.png" />
+    <EmbeddedResource Include="assets\스크린샷_기본앱등록.png" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Markdig" Version="0.41.3" />
