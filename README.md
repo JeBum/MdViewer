@@ -4,28 +4,6 @@
 
 https://github.com/JeBum/MDviewer
 
-## 스크린샷
-
-### 홈
-
-![MDviewer 홈 화면](스크린샷_Home.png)
-
-### 서강 테마
-
-![MDviewer 서강 테마](스크린샷_서강테마.png)
-
-### 알바트로스 테마
-
-![MDviewer 알바트로스 테마](스크린샷_알바트로스테마.png)
-
-### 블루스카이 테마
-
-![MDviewer 블루스카이 테마](스크린샷_블루스카이테마.png)
-
-### 편집 모드
-
-![MDviewer 편집 모드](스크린샷_편집모드.png)
-
 ## 요구 사항
 
 - Windows 10/11 x64
