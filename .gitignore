@@ -12,3 +12,8 @@ setup_proj/payload/
 *.zip
 *.dll
 *.lnk
+
+# Generated verification outputs
+verification/*.log
+verification/artifacts/
+verification/cursor-artifacts/

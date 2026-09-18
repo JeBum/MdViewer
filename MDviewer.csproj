@@ -23,6 +23,7 @@
     <None Remove="setup_proj\**" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="test-sample.md" LogicalName="MDviewer.test-sample.md" />
     <EmbeddedResource Include="assets\logo.png" />
     <EmbeddedResource Include="assets\footer.png" />
     <EmbeddedResource Include="assets\app.ico" />

@@ -1,0 +1,853 @@
+using System.Reflection;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Net;
+using System.IO.Compression;
+using System.Xml.Linq;
+using MDviewer;
+using Microsoft.Web.WebView2.WinForms;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
+
+namespace Verification;
+
+internal static class Checks
+{
+    const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+    static string Root = "", Artifacts = "";
+    static readonly List<object> Results = new();
+    static int Passed, Failed, Blocked;
+    static FileTab Tab = null!;
+    static RichTextBox Editor = null!;
+    static WebView2 Web = null!;
+    static Form Host = null!;
+    static object? Call(string name, params object?[] args) => typeof(FileTab).GetMethod(name, Flags)!.Invoke(Tab, args);
+    static T Field<T>(string name) => (T)typeof(FileTab).GetField(name, Flags)!.GetValue(Tab)!;
+    static void SetField(string name, object value) => typeof(FileTab).GetField(name, Flags)!.SetValue(Tab, value);
+    static string Render(string md) => (string)Call("RenderHtml", md)!;
+    static string ImageHtml(string md) => (string)Call("RewriteLocalImages", Render(md), Root)!;
+    static string Plain(string html) => WebUtility.HtmlDecode(Regex.Replace(html, "<[^>]+>", ""));
+    static void Require(bool condition, string detail) { if (!condition) throw new Exception(detail); }
+    static void Equal<T>(T expected, T actual) => Require(Equals(expected, actual), $"Expected {JsonSerializer.Serialize(expected)}; actual {JsonSerializer.Serialize(actual)}");
+    static void Record(string id, string name, string status, string detail)
+    {
+        if (status == "PASS") Passed++; else if (status == "FAIL") Failed++; else Blocked++;
+        Results.Add(new { id, name, status, detail });
+        Console.WriteLine($"{status} {id}: {name} -- {detail}");
+        File.WriteAllText(Path.Combine(Artifacts, "results.json"), JsonSerializer.Serialize(Results, new JsonSerializerOptions { WriteIndented = true }));
+    }
+    static void Test(string id, string name, Action test)
+    {
+        try { test(); Record(id, name, "PASS", "Assertions satisfied"); }
+        catch (Exception e) { Record(id, name, "FAIL", (e.InnerException ?? e).Message); }
+    }
+    static async Task TestAsync(string id, string name, Func<Task> test)
+    {
+        try { await test(); Record(id, name, "PASS", "Assertions satisfied"); }
+        catch (Exception e) { Record(id, name, "FAIL", (e.InnerException ?? e).Message); }
+    }
+    static void Text(string value, int? caret = null)
+    {
+        Editor.Text = value;
+        Editor.Select(caret ?? Editor.TextLength, 0);
+        Field<System.Windows.Forms.Timer>("_previewTick").Stop();
+    }
+    static void Key(Keys key) => typeof(Control).GetMethod("OnKeyDown", Flags)!.Invoke(Editor, new object[] { new KeyEventArgs(key) });
+    static async Task<JsonElement> JS(string script)
+    {
+        string result = await Web.ExecuteScriptAsync("(()=>{try{return (" + script + ");}catch(e){return {error:String(e)};}})()");
+        return JsonSerializer.Deserialize<JsonElement>(result);
+    }
+    static async Task Wait(Func<Task<bool>> predicate, int milliseconds = 12000)
+    {
+        var end = DateTime.UtcNow.AddMilliseconds(milliseconds);
+        do { if (await predicate()) return; await Task.Delay(100); } while (DateTime.UtcNow < end);
+        throw new TimeoutException("Condition not reached within " + milliseconds + " ms");
+    }
+    static async Task Page(string md, bool images = false)
+    {
+        var html = (string)Call("WrapHtml", images ? ImageHtml(md) : Render(md))!;
+        File.WriteAllText(Path.Combine(Artifacts, "last-page.html"), html);
+        var pageId = Guid.NewGuid().ToString("N");
+        html = html.Replace("<head>", "<head><meta name='verification-id' content='" + pageId + "'>");
+        Web.NavigateToString(html);
+        await Wait(async () => (await JS("document.querySelector('meta[name=verification-id]')?.content")).ToString() == pageId && (await JS("typeof findInPage")).ToString() == "function", 25000);
+        await Task.Delay(100);
+    }
+    [STAThread]
+    static int Main(string[] args)
+    {
+        Root = args[0];
+        bool cursorOnly = args.Contains("--cursor");
+        Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER",Path.Combine(Root,"obj","verification","wv2"));
+        Artifacts = Path.Combine(Root, "verification", cursorOnly ? "cursor-artifacts" : "artifacts");
+        Directory.CreateDirectory(Artifacts);
+        Application.SetHighDpiMode(HighDpiMode.SystemAware);
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Brand.Init();
+        Host = new Form { Text = "MDviewer verification host", ShowInTaskbar = false, Opacity = 0, Size = new Size(1200, 800) };
+        Host.Shown += async (_, _) =>
+        {
+            try
+            {
+                if(args.Contains("--native")) { await RunThemeDirtyState(); await RunHomeSample(); return; }
+                Tab = new FileTab(null);
+                Editor = Field<RichTextBox>("_text");
+                if (!cursorOnly) RunLogic();
+                Host.Controls.Add(Tab);
+                Web = Field<WebView2>("_web");
+                await Wait(() => Task.FromResult(Field<bool>("_ready")), 20000);
+                if(args.Contains("--editor")){await RunEditorIsolation();return;}
+                if (!cursorOnly) { await RunWeb(); await RunApp(); }
+                await RunCursor();
+                await RunSplit();
+                await RunWordView();
+                await RunForestTheme();
+                await RunThemeDirtyState();
+                await RunHomeSample();
+                await RunEditorIsolation();
+            }
+            catch (Exception e) { Record("ENV", "Integration environment", "BLOCKED", e.ToString()); }
+            finally
+            {
+                if (Tab != null) { Tab.DisposeWatch(); Tab.Dispose(); }
+                Console.WriteLine($"TOTAL: {Passed} PASS / {Failed} FAIL / {Blocked} BLOCKED");
+                Host.Close();
+            }
+        };
+        Application.Run(Host);
+        return Failed > 0 || Blocked > 0 ? 1 : 0;
+    }
+    static void RunLogic()
+    {
+        Test("LINE-01", "Logical line ignores long wrapped text", () => Equal(1, FileTab.GetLogicalLine(new string('a', 1000) + "\nnext", 1001)));
+        Test("LINE-02", "Logical line LF and CRLF boundaries", () => { Equal(1, FileTab.GetLogicalLine("a\r\nb", 3)); Equal(0, FileTab.GetLogicalLine("a\nb", 1)); Equal(1, FileTab.GetLogicalLine("a\nb", 2)); });
+        Test("LINE-03", "Logical line count empty and trailing newline", () => { Equal(1, FileTab.CountLogicalLines("")); Equal(3, FileTab.CountLogicalLines("a\nb\n")); });
+        Test("LINE-04", "Line-to-character mapping", () => { Equal(3, FileTab.GetCharIndexOfLogicalLine("a\r\nb\nc", 1)); Equal(5, FileTab.GetCharIndexOfLogicalLine("a\r\nb\nc", 2)); });
+        Test("MD-01", "Headings bold italic strike and mark", () => { var h = Render("# Title\n\n**bold** *italic* ~~strike~~ ==mark=="); foreach (var s in new[] { "<h1", "<strong>bold</strong>", "<em>italic</em>", "<del>strike</del>", "<mark>mark</mark>" }) Require(h.Contains(s), s + " missing"); });
+        Test("MD-02", "Table without preceding blank line", () => Require(Render("intro\n| A | B |\n|---|---|\n| 1 | 2 |").Contains("<table"), "No table"));
+        Test("MD-03", "Source-line mapping survives table normalization", () => { var src = "intro\n|A|B|\n|-|-|\n|1|2|\n\nend"; for (int i = 0; i < 6; i++) Equal(i, (int)Call("FromNormLine", src, (int)Call("ToNormLine", src, i)!)!); });
+        Test("MD-04", "Frontmatter excluded from preview", () => { var h = Render("---\ntitle: secretmetadata\n---\n\nBody"); Require(!h.Contains("secretmetadata") && h.Contains("Body"), h); });
+        Test("MD-05", "Footnote reference definition and backlink", () => { var h = Render("text[^a]\n\n[^a]: note"); Require(h.Contains("footnote-ref") && h.Contains("href=\"#fnref:1\"") && h.Contains("note"), h); });
+        Test("JSON-01", "All JSON token types", () => { var h = (string)Call("RenderJsonHtml", "{\"s\":\"한글\",\"n\":1.2,\"b\":true,\"z\":null}")!; foreach (var token in new[] { "json-key", "json-string", "json-number", "json-bool", "json-null", "json-punct" }) Require(h.Contains(token), token); Require(!h.Contains("json-has-error"), h); });
+        Test("JSON-02", "JSONC sample accepts comments and trailing comma", () => Require(!((string)Call("RenderJsonHtml", File.ReadAllText(Path.Combine(Root, "test-sample.jsonc")))!).Contains("json-has-error"), "JSONC error"));
+        Test("JSON-03", "Invalid JSON shows error with line and source", () => { var h = (string)Call("RenderJsonHtml", "{\n\"a\":[1,2\n}")!; Require(h.Contains("Syntax Error") && h.Contains("(line ") && h.Contains("json-invalid"), h); });
+        Test("JSON-04", "Minified JSON gets two-space indentation", () => { var h = (string)Call("RenderJsonHtml", "{\"a\":1}")!; Require(h.Contains("class='line-content'>  <span class='json-key'>"), h); });
+        Test("JSON-05", "Markdown JSON blocks are formatted", () => Require(Render("```json\n{\"a\":1}\n```").Contains("Copy JSON"), "JSON block was not converted"));
+        Test("CODE-01", "Code headers and line numbers", () => { var h = Render("```python\nfirst\nsecond\n```"); Require(h.Contains("copy-code-btn"), h); Equal(2, Regex.Matches(h, "class='line-num'").Count); });
+        Test("CODE-02", "HTML inside code stays text", () => { var h = Render("```\n<script>alert(1)</script>\n```"); Require(h.Contains("&lt;script&gt;") && !h.Contains("<script>"), h); });
+        Test("CALLOUT-01", "Five documented GitHub callout types", () => { foreach (var k in new[] { "NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION" }) Require(Render($"> [!{k}] Title\n> Body").Contains("markdown-alert-" + k.ToLowerInvariant()), k); });
+        Test("CALLOUT-02", "Callout containing list remains callout", () => Require(Render("> [!NOTE] Title\n>\n> - item").Contains("markdown-alert-note"), "Nested list prevents callout conversion"));
+        Test("CALLOUT-03", "Collapsed callout exposes a toggle", () => { var h = Render("> [!warning]- Folded\n> Body"); Require(h.Contains("<details") || h.Contains("aria-expanded") || h.Contains("<button"), h); });
+        Test("IMAGE-01", "Standalone image gets searchable caption", () => { var h = ImageHtml("![caption](assets/albatross.png)"); Require(h.Contains("<figcaption") && h.Contains("file:///"), h); });
+        Test("IMAGE-02", "Caption displays special characters once", () => { var h = ImageHtml("![A & B](assets/albatross.png)"); var m = Regex.Match(h, "<figcaption[^>]*>(.*?)</figcaption>"); Equal("A & B", Plain(m.Groups[1].Value)); });
+        Test("IMAGE-03", "Inline image caption is searchable", () => Require(ImageHtml("before ![inlinecaption](assets/albatross.png) after").Contains("<figcaption"), "Inline image alt has no visible text node"));
+        SetField("_editMode", true); Editor.ReadOnly = false;
+        Test("EDIT-01", "Ctrl+B wraps selected text", () => { Text("hello"); Editor.SelectAll(); Key(Keys.Control | Keys.B); Equal("**hello**", Editor.Text); });
+        Test("EDIT-02", "Ctrl+I inserts placeholder without selection", () => { Text(""); Key(Keys.Control | Keys.I); Equal("*기울임 텍스트*", Editor.Text); Equal("기울임 텍스트", Editor.SelectedText); });
+        Test("EDIT-03", "Ctrl+K inserts link and selects URL", () => { Text("label"); Editor.SelectAll(); Key(Keys.Control | Keys.K); Equal("[label](https://)", Editor.Text); Equal("https://", Editor.SelectedText); });
+        Test("EDIT-04", "Bullet list continues on Enter", () => { Text("- first"); Key(Keys.Enter); Equal("- first\n- ", Editor.Text.Replace("\r\n", "\n")); });
+        Test("EDIT-05", "Ordered list increments number", () => { Text("9. first"); Key(Keys.Enter); Equal("9. first\n10. ", Editor.Text.Replace("\r\n", "\n")); });
+        Test("EDIT-06", "Empty list exits on Enter", () => { Text("- "); Key(Keys.Enter); Equal("\n", Editor.Text.Replace("\r\n", "\n")); });
+        Test("EDIT-07", "Tab and Shift+Tab preserve list marker", () => { Text("- first"); Key(Keys.Tab); Equal("  - first", Editor.Text); Key(Keys.Shift | Keys.Tab); Equal("- first", Editor.Text); });
+        Test("EDIT-08", "Wrapped list continues at logical end", () => { Editor.Width = 100; Editor.CreateControl(); Text("- " + string.Join(" ", Enumerable.Repeat("longword", 30))); Require(Editor.GetLineFromCharIndex(Editor.TextLength) > 0, "Wrap precondition not met"); Key(Keys.Enter); Require(Editor.Text.EndsWith("\n- "), "No next list marker; visual line=" + Editor.GetLineFromCharIndex(Editor.TextLength)); });
+        Test("EDIT-09", "Wrapped list indents logical item", () => { Text("- " + string.Join(" ", Enumerable.Repeat("longword", 30))); Key(Keys.Tab); Require(Editor.Text.StartsWith("  - "), "Logical item was not indented"); });
+        Test("EDIT-10", "Ctrl+Shift+H wraps highlight markup", () => { Text("highlight"); Editor.SelectAll(); Key(Keys.Control | Keys.Shift | Keys.H); Equal("==highlight==", Editor.Text); });
+        Test("FIND-01", "Search is literal and case insensitive", () => { Text("A.b a.b axb"); Equal(2, Tab.GetMatches("a.b", false).Count); });
+        Test("FIND-02", "English whole-word source search", () => { Text("cat scatter cat"); Equal(2, Tab.GetMatches("cat", true).Count); });
+        Test("FIND-03", "Korean whole-word source search", () => { Text("문서 문서들 문서"); Equal(2, Tab.GetMatches("문서", true).Count); });
+        Test("HL-01", "Keyword toggles add and remove", () => { Field<TextBox>("_txtHl").Text = ""; Tab.ToggleHighlightKeyword("word"); Equal("word", Field<TextBox>("_txtHl").Text); Tab.ToggleHighlightKeyword("word"); Equal("", Field<TextBox>("_txtHl").Text); });
+        Test("TASK-01", "Checkbox changes source and dirty state", () => { typeof(FileTab).GetProperty("Path")!.SetValue(Tab, Path.Combine(Artifacts, "scratch.md")); Text("- [ ] todo"); Call("ToggleTaskAtLine", 1, true); Equal("- [x] todo", Editor.Text); Require(Tab.Dirty, "Dirty is false"); Call("ToggleTaskAtLine", 1, false); Equal("- [ ] todo", Editor.Text); });
+        Test("FILE-01", "Save and reload preserve Korean text", () => { Text("# 임시 문서\n\n한글 테스트"); Tab.Save(); Require(!Tab.Dirty, "Save did not clear dirty"); var path = Tab.Path; Equal(Editor.Text, File.ReadAllText(path)); Text("changed"); Tab.Reload(); Equal(File.ReadAllText(path), Editor.Text); });
+
+        foreach (var (id, md, forbidden, expected) in new[] {
+            ("SPEC-01", "[[문서명]]", "[[문서명]]", "<a "),
+            ("SPEC-02", "#중첩/태그", "#중첩/태그", "badge"),
+            ("SPEC-03", "![[문서명]]", "![[문서명]]", "embed"),
+            ("SPEC-04", "((abc123))", "((abc123))", "reference"),
+            ("SPEC-06", "상태:: 진행중", "상태:: 진행중", "badge"),
+            ("SPEC-07", "visible %%hiddenmemo%%", "hiddenmemo", "visible"),
+            ("SPEC-08", "```dataview\nTABLE status FROM #project\n```", "", "<table") })
+        {
+            Test(id, "Additional syntax: " + md.Split('\n')[0], () => { var h = Render(md); if (id == "SPEC-07") Require(!h.Contains(forbidden), "Comment remains visible: " + h); else Require(h.Contains(expected) && (forbidden == "" || !Plain(h).Contains(forbidden)), "Required semantic output absent: " + h); });
+        }
+        SetField("_editMode", false); Editor.ReadOnly = true; Text("# Web integration");
+        Field<System.Windows.Forms.Timer>("_previewTick").Stop();
+    }
+    static async Task RunWeb()
+    {
+        await TestAsync("WEB-01", "Preview JavaScript loads", async () => { await Page("# Test\n\nBody"); Equal("function", (await JS("typeof findInPage")).GetString()); });
+        await TestAsync("WEB-02", "Substring find highlights three matches", async () => { await Page("cat scatter cat"); Equal(3, (await JS("findInPage('cat',false,0)")).GetInt32()); });
+        await TestAsync("WEB-03", "Whole-word preview matches source count", async () => { await Page("cat scatter cat"); Equal(2, (await JS("findInPage('cat',true,0)")).GetInt32()); });
+        await TestAsync("WEB-04", "Korean whole-word preview matches source count", async () => { await Page("문서 문서들 문서"); Equal(2, (await JS("findInPage('문서',true,0)")).GetInt32()); });
+        await TestAsync("WEB-05", "Find literal punctuation", async () => { await Page("a.b axb a.b"); Equal(2, (await JS("findInPage('a.b',false,0)")).GetInt32()); });
+        await TestAsync("WEB-06", "Clear find removes all markers", async () => { await JS("(clearFindHighlights(),true)"); Equal(0, (await JS("document.querySelectorAll('.md-find-hl').length")).GetInt32()); });
+        await TestAsync("WEB-07", "Code copy preserves real line breaks and omits numbers", async () => { await Page("```text\nfirst\nsecond\n```"); var captured = await JS("(()=>{window.__copied=null;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:t=>{window.__copied=t;return Promise.resolve();}}});copyCode(document.querySelector('.copy-code-btn'));return window.__copied;})()"); File.WriteAllText(Path.Combine(Artifacts, "copied-code.txt"), captured.GetString()!); Equal("first\nsecond", captured.GetString()); });
+        await TestAsync("WEB-08", "JSON copy produces parseable JSON", async () => { await Page("```json\n{\"a\":1,\"b\":true}\n```"); var c = await JS("(()=>{window.__copied=null;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:t=>{window.__copied=t;return Promise.resolve();}}});copyCode(document.querySelector('.copy-code-btn'));return window.__copied;})()"); File.WriteAllText(Path.Combine(Artifacts, "copied-json.txt"), c.GetString()!); using var json = JsonDocument.Parse(c.GetString()!); Equal(1, json.RootElement.GetProperty("a").GetInt32()); });
+        await TestAsync("WEB-09", "Caption punctuation displays correctly", async () => { await Page("![A & B](assets/albatross.png)", true); Equal("A & B", (await JS("document.querySelector('figcaption').textContent")).GetString()); });
+        await TestAsync("WEB-10", "Image caption can be searched", async () => { await Page("![caption](assets/albatross.png)", true); Equal(1, (await JS("findInPage('caption',false,0)")).GetInt32()); });
+        await TestAsync("WEB-11", "Keyword highlighting excludes code line numbers", async () => { await Page("```text\nvalue 1\n```"); await JS("(applyHighlightKeywords(['1']),true)"); Equal(0, (await JS("document.querySelectorAll('.line-num .md-kw-hl').length")).GetInt32()); });
+        await TestAsync("WEB-12", "Math dollar and parenthesis delimiters", async () => { await Page("$E=mc^2$\n\n\\(x^2\\)\n\n$$x^2$$\n\n\\[x^2\\]"); await Wait(async () => (await JS("typeof renderMathInElement")).ToString() == "function", 12000); await JS("(renderMath(),true)"); Equal(4, (await JS("document.querySelectorAll('.katex').length")).GetInt32()); });
+        await TestAsync("WEB-13", "Invalid math preserves visible error source", async () => { await Page("$\\invalidcommand{x}$"); await JS("(renderMath(),true)"); File.WriteAllText(Path.Combine(Artifacts, "invalid-math.html"), (await JS("document.querySelector('.md').innerHTML")).ToString()); Require((await JS("Array.from(document.querySelectorAll('.md *')).some(e=>/rgb\\(\\d+, 0, 0\\)/.test(getComputedStyle(e).color))")).GetBoolean(), "No red error text"); Require((await JS("document.querySelector('.md').textContent")).ToString().Contains("invalidcommand"), "Source lost"); });
+        await TestAsync("WEB-14", "Checkbox DOM click updates source without replacing DOM", async () => { Text("- [ ] todo"); await Page(Editor.Text); await JS("(window.__article=document.querySelector('.md'),document.querySelector('input[type=checkbox]').click(),true)"); await Wait(() => Task.FromResult(Editor.Text.Contains("[x]")), 3000); Require((await JS("window.__article===document.querySelector('.md') && document.querySelector('input').checked")).GetBoolean(), "DOM or checked state changed"); });
+        await TestAsync("WEB-15", "Checkbox after normalized table updates correct source line", async () => { Text("intro\n|A|B|\n|-|-|\n|1|2|\n\n- [ ] todo"); await Page(Editor.Text); await JS("(document.querySelector('input[type=checkbox]').click(),true)"); await Wait(() => Task.FromResult(Editor.Text.Contains("[x]")), 3000); });
+        await TestAsync("WEB-16", "Task completion applies strike-through", async () => { await Page("- [x] done"); var style = await JS("getComputedStyle(document.querySelector('.task-list-item')).textDecorationLine"); Require(style.ToString().Contains("line-through"), "Computed decoration: " + style); });
+        await TestAsync("WEB-17", "Edit refresh retains active search highlights", async () => { await Page("cat cat"); await JS("findInPage('cat',false,0)"); await JS("(updatePreviewContent('<p>cat cat updated</p>',0,1),true)"); Equal(2, (await JS("document.querySelectorAll('.md-find-hl').length")).GetInt32()); });
+        await TestAsync("WEB-18", "Four theme checkbox accents", async () => { foreach (var (theme, color) in new[] { (AppTheme.Sogang, "rgb(179, 41, 46)"), (AppTheme.BlueSky, "rgb(2, 132, 199)"), (AppTheme.Albatross, "rgb(34, 34, 34)"), (AppTheme.ForestGreen, "rgb(47, 107, 79)") }) { Brand.Theme = theme; await Page("- [ ] task"); Equal(color, (await JS("getComputedStyle(document.querySelector('input')).accentColor")).GetString()); } });
+        await TestAsync("WEB-19", "Standalone test sample renders all eleven sections", async () => { await Page(File.ReadAllText(Path.Combine(Root, "test-sample.md")), true); Equal(11, (await JS("document.querySelectorAll('h2').length")).GetInt32()); Require((await JS("document.querySelectorAll('.json-has-error').length")).GetInt32() == 1, "Expected one intentionally invalid JSON"); });
+        await TestAsync("SPEC-05", "Mermaid produces a diagram in WebView2", async () => { await Page("```mermaid\ngraph LR; A-->B;\n```"); await Task.Delay(500); Equal(1, (await JS("document.querySelectorAll('svg').length")).GetInt32()); });
+        await TestAsync("ZOOM-01", "Editor-only zoom leaves preview scale unchanged", async () => { SetField("_zoomAt", DateTime.MinValue); var before = Field<double>("_zoomWeb"); Tab.AdjustEditZoom(0.08); Equal(before, Field<double>("_zoomWeb")); Equal(1.08, Field<double>("_zoomEdit")); await Task.CompletedTask; });
+        await TestAsync("ZOOM-02", "Combined zoom applies to editor and preview", async () => { SetField("_zoomAt", DateTime.MinValue); var e = Field<double>("_zoomEdit"); var w = Field<double>("_zoomWeb"); Tab.AdjustAllZoom(0.08); Equal(e + 0.08, Field<double>("_zoomEdit")); Equal(w + 0.08, Field<double>("_zoomWeb")); await Task.Delay(150); Equal("1.08", (await JS("document.documentElement.style.zoom")).GetString()); });
+        await TestAsync("ZOOM-03", "Zoom OSD appears and expires", async () => { await JS("(showZoomOsd(125),true)"); Equal("125%", (await JS("document.getElementById('__zoom_osd').textContent")).GetString()); await Task.Delay(1450); Equal("0", (await JS("document.getElementById('__zoom_osd').style.opacity")).GetString()); });
+    }
+    static async Task RunApp()
+    {
+        var originalTab = Tab;
+        var originalEditor = Editor;
+        using var main = new MainForm(Array.Empty<string>()) { Opacity = 0, ShowInTaskbar = false };
+        var paths = new[] { "tab-a.md", "tab-b.md", "tab-c.md" }.Select(n => Path.Combine(Artifacts, n)).ToArray();
+        File.WriteAllText(paths[0], "alpha"); File.WriteAllText(paths[1], "no match"); File.WriteAllText(paths[2], "alpha beta");
+        try
+        {
+            main.Show();
+            Test("APP-01", "Open multiple files as separate tabs", () => { foreach (var p in paths) main.OpenFile(p); Equal(3, main.GetAllTabs().Count); });
+            var tabs = main.GetAllTabs();
+            Tab = tabs[0]; Editor = Field<RichTextBox>("_text"); main.SelectTabByIndex(0);
+            Test("APP-02", "F8 enters split editor and returns to viewer", () => { typeof(Control).GetMethod("OnKeyDown", Flags)!.Invoke(main, new object[] { new KeyEventArgs(Keys.F8) }); Require(Tab.EditMode && Tab.Split == SplitMode.Vertical, "Did not enter editor"); typeof(Control).GetMethod("OnKeyDown", Flags)!.Invoke(main, new object[] { new KeyEventArgs(Keys.F8) }); Require(!Tab.EditMode && Tab.Split == SplitMode.None, "Did not return to viewer"); });
+            Test("APP-03", "All-tabs search skips nonmatching tab", () => { Tab.ShowFindBar("alpha", false, true); Tab.SelectMatch(Tab.GetMatches("alpha", false), 0); Tab.FindNext(true); Equal(2, ((TabControl)typeof(MainForm).GetField("_tabs", Flags)!.GetValue(main)!).SelectedIndex); });
+            Test("APP-04", "All-tabs search wraps last to first", () => { tabs[2].FindNext(true); Equal(0, ((TabControl)typeof(MainForm).GetField("_tabs", Flags)!.GetValue(main)!).SelectedIndex); });
+            Test("APP-05", "All-tabs reverse search wraps first to last", () => { tabs[0].FindNext(false); Equal(2, ((TabControl)typeof(MainForm).GetField("_tabs", Flags)!.GetValue(main)!).SelectedIndex); });
+            Test("APP-06", "Hide search closes bars across all tabs", () => { main.HideAllFindBars(); for (var i = 0; i < tabs.Count; i++) { main.SelectTabByIndex(i); var bar = (Panel)typeof(FileTab).GetField("_findBar", Flags)!.GetValue(tabs[i])!; Require(!bar.Visible, "Search bar remained visible in tab " + i); } });
+            Test("APP-07", "Opening same file does not duplicate tab", () => { main.OpenFile(paths[0]); Equal(3, main.GetAllTabs().Count); });
+            Test("APP-08", "Reopening already-open file preserves unsaved edits", () => { Text("unsaved local edit"); main.OpenFile(paths[0]); Equal("unsaved local edit", Editor.Text); Require(Tab.Dirty, "Dirty state lost"); });
+            Tab.Reload();
+            Test("APP-09", "Ctrl+N and Ctrl+W create and close blank tab", () => { typeof(Control).GetMethod("OnKeyDown", Flags)!.Invoke(main, new object[] { new KeyEventArgs(Keys.Control | Keys.N) }); Equal(4, main.GetAllTabs().Count); typeof(Control).GetMethod("OnKeyDown", Flags)!.Invoke(main, new object[] { new KeyEventArgs(Keys.Control | Keys.W) }); Equal(3, main.GetAllTabs().Count); });
+            Test("APP-10", "Close other documents keeps selected tab", () => { main.SelectTabByIndex(0); typeof(MainForm).GetMethod("CloseOthers", Flags)!.Invoke(main, new object[] { tabs[0].HostPage! }); Equal(1, main.GetAllTabs().Count); Equal(paths[0], main.GetAllTabs()[0].Path); });
+            Test("APP-11", "Close all returns to empty tabs", () => { typeof(MainForm).GetMethod("CloseAll", Flags)!.Invoke(main, null); Equal(0, main.GetAllTabs().Count); });
+            await Task.Delay(200);
+        }
+        finally { foreach (var t in main.GetAllTabs()) { t.DisposeWatch(); t.Dispose(); } main.Close(); Tab = originalTab; Editor = originalEditor; }
+    }
+    static async Task RunCursor()
+    {
+        const string doc = "# 현재 편집 위치\n\n첫 번째 문단입니다.\n\n여기를 편집하고 있습니다.\n\n다음 문단입니다.";
+        await TestAsync("CURSOR-01", "Viewer starts without a current-line marker", async () => { await Page(doc); Require((await JS("!document.getElementById('md-cursor-indicator') || document.getElementById('md-cursor-indicator').hidden")).GetBoolean(), "Marker visible in viewer mode"); });
+        await TestAsync("CURSOR-02", "Triangle in a dedicated rail without block highlight", async () =>
+        {
+            await Page(doc);
+            await JS("(window.__beforeStyle=[getComputedStyle(document.querySelector('p')).backgroundColor,getComputedStyle(document.querySelector('p')).boxShadow],scrollToCursorLine(3,7),true)");
+            var r = await JS("(()=>{const m=document.getElementById('md-cursor-indicator'),r=m.getBoundingClientRect(),s=getComputedStyle(m);return {left:r.left,width:r.width,height:r.height,hidden:m.hidden,pointer:s.pointerEvents,shape:s.clipPath,plain:JSON.stringify(window.__beforeStyle)===JSON.stringify([getComputedStyle(document.querySelector('p')).backgroundColor,getComputedStyle(document.querySelector('p')).boxShadow])};})()");
+            Require(!r.GetProperty("hidden").GetBoolean() && r.GetProperty("plain").GetBoolean(), r.ToString());
+            Require(Math.Abs(r.GetProperty("left").GetDouble()-8)<1 && Math.Abs(r.GetProperty("width").GetDouble()-8)<1 && Math.Abs(r.GetProperty("height").GetDouble()-12)<1, r.ToString());
+            Equal("none", r.GetProperty("pointer").GetString()); Require(r.GetProperty("shape").ToString().StartsWith("polygon"),r.ToString());
+        });
+        await TestAsync("CURSOR-03", "Editor cursor moves the single marker to the next paragraph", async () =>
+        {
+            Text(doc); SetField("_editMode", true);
+            var oldY = (await JS("document.getElementById('md-cursor-indicator').getBoundingClientRect().top")).GetDouble();
+            Editor.Select(Editor.Text.IndexOf("여기를", StringComparison.Ordinal), 0);
+            Call("SyncCursorToWeb");
+            await Wait(async () => (await JS("document.getElementById('md-cursor-indicator').getBoundingClientRect().top")).GetDouble() > oldY + 10);
+            Equal(1, (await JS("document.querySelectorAll('#md-cursor-indicator').length")).GetInt32());
+            SetField("_editMode", false);
+        });
+        await TestAsync("CURSOR-04", "Marker stays aligned when zoom changes", async () =>
+        {
+            await Page(doc); await JS("(document.documentElement.style.zoom='1.6',scrollToCursorLine(5,7),true)"); await Task.Delay(150);
+            var r = await JS("(()=>{const m=document.getElementById('md-cursor-indicator').getBoundingClientRect(),p=document.querySelector('[data-src-line=\"5\"]'),r=p.getBoundingClientRect(),z=parseFloat(getComputedStyle(document.documentElement).zoom);return {error:Math.abs(m.top+m.height/2-(r.top+Math.min(r.height,parseFloat(getComputedStyle(p).lineHeight)*z)/2)),left:m.left,width:m.width};})()");
+            Require(r.GetProperty("error").GetDouble()<1 && Math.Abs(r.GetProperty("left").GetDouble()-8)<1 && Math.Abs(r.GetProperty("width").GetDouble()-8)<1, r.ToString());
+            await JS("(document.documentElement.style.zoom='1',updateCursorIndicator(),true)");
+        });
+        await TestAsync("CURSOR-05", "Scrolling out of view hides marker and returning restores it", async () =>
+        {
+            await Page(string.Join("\n\n", Enumerable.Range(1,80).Select(i=>"문단 " + i)));
+            await JS("(scrollToCursorLine(79,159),true)"); await Task.Delay(150);
+            Require((await JS("!document.getElementById('md-cursor-indicator').hidden")).GetBoolean(), "Marker initially hidden");
+            await JS("(window.scrollTo(0,0),true)");
+            await Wait(async () => (await JS("document.getElementById('md-cursor-indicator').hidden")).GetBoolean());
+            await JS("(scrollToCursorLine(79,159),true)");
+            Require((await JS("!document.getElementById('md-cursor-indicator').hidden")).GetBoolean(), "Marker did not return");
+        });
+        await TestAsync("CURSOR-06", "Live preview update replaces marker target without duplicates", async () =>
+        {
+            await Page(doc); await JS("(scrollToCursorLine(3,7),updatePreviewContent('<h1 data-src-line=\"1\">수정됨</h1><p data-src-line=\"3\">새 내용</p>',3,3),true)");
+            Require((await JS("document.querySelectorAll('#md-cursor-indicator').length===1 && !document.getElementById('md-cursor-indicator').hidden && document.querySelector('.md').textContent.includes('새 내용')")).GetBoolean(), "Marker missing or duplicate after refresh");
+        });
+        await TestAsync("CURSOR-07", "Leaving edit mode clears the position rail", async () =>
+        {
+            SetField("_editMode", true); Tab.EditMode = false;
+            await Wait(async () => (await JS("!document.getElementById('md-cursor-indicator') || document.getElementById('md-cursor-indicator').hidden")).GetBoolean());
+        });
+        await TestAsync("CURSOR-08", "Marker follows all four theme colors", async () =>
+        {
+            foreach (var (theme, color) in new[] { (AppTheme.Sogang,"rgb(179, 41, 46)"), (AppTheme.BlueSky,"rgb(2, 132, 199)"), (AppTheme.Albatross,"rgb(51, 51, 51)"), (AppTheme.ForestGreen,"rgb(47, 107, 79)") })
+            {
+                Brand.Theme = theme; await Page(doc); await JS("(scrollToCursorLine(5,7),true)");
+                Equal(color,(await JS("getComputedStyle(document.getElementById('md-cursor-indicator')).backgroundColor")).GetString());
+            }
+        });
+        await TestAsync("CURSOR-09", "Position rail has no edit label and is separate from document", async () =>
+        {
+            await Page(doc); await JS("(scrollToCursorLine(5,7),true)");
+            Require((await JS("(()=>{const r=document.getElementById('md-position-rail'),a=document.querySelector('.md');return !r.hidden && r.textContent==='' && !document.querySelector('.md-position-label') && !a.contains(r) && r.getBoundingClientRect().right<=a.getBoundingClientRect().left && getComputedStyle(r).borderRightStyle==='solid';})()")).GetBoolean(), "Rail not visually separate from article");
+            await JS("(clearCursorHighlight(),true)");
+            Require((await JS("document.getElementById('md-position-rail').hidden && !document.body.classList.contains('md-edit-position')")).GetBoolean(), "Rail remains after leaving edit position");
+        });
+        await TestAsync("THEME-01", "Blue Sky uses white native and preview backgrounds", async () =>
+        {
+            Brand.Theme=AppTheme.BlueSky; Tab.ApplyChrome(); await Page(doc);
+            Equal(Color.White.ToArgb(),Brand.Wash.ToArgb()); Equal(Color.White.ToArgb(),Tab.BackColor.ToArgb());
+            Equal("rgb(255, 255, 255)",(await JS("getComputedStyle(document.body).backgroundColor")).GetString());
+            Equal("rgb(255, 255, 255)",(await JS("getComputedStyle(document.documentElement).backgroundColor")).GetString());
+        });
+        Brand.Theme=AppTheme.Sogang; await Page(doc); await JS("(scrollToCursorLine(5,7),true)");
+        await Wait(async () => (await JS("document.fonts.status")).ToString() == "loaded");
+        await Task.Delay(150);
+        using var screenshot=File.Create(Path.Combine(Artifacts,"cursor-preview.png"));
+        await Web.CoreWebView2.CapturePreviewAsync(Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png,screenshot);
+    }
+    static async Task RunSplit()
+    {
+        var split=Field<SplitContainer>("_split");
+        double Ratio() => (double)split.SplitterDistance / ((split.Orientation==Orientation.Vertical ? split.ClientSize.Width : split.ClientSize.Height)-split.SplitterWidth);
+        void SetRatio(double ratio) => split.SplitterDistance=(int)Math.Round(((split.Orientation==Orientation.Vertical ? split.ClientSize.Width : split.ClientSize.Height)-split.SplitterWidth)*ratio);
+        void CheckRatio(double ratio) => Require(Math.Abs(Ratio()-ratio)<0.01, $"Expected ratio {ratio}, actual {Ratio()}");
+        await TestAsync("SPLIT-01", "Vertical divider moves and survives layout refresh", async () => { Tab.Split=SplitMode.Vertical; Require(!split.IsSplitterFixed && split.SplitterWidth>=8,"Divider not draggable"); SetRatio(0.30); Call("ApplyLayout"); await Task.Delay(100); CheckRatio(0.30); });
+        await TestAsync("SPLIT-02", "Horizontal divider moves and survives layout refresh", async () => { Tab.Split=SplitMode.Horizontal; SetRatio(0.65); Call("ApplyLayout"); await Task.Delay(100); CheckRatio(0.65); });
+        await TestAsync("SPLIT-03", "Vertical and horizontal ratios are remembered separately", async () => { Tab.Split=SplitMode.Vertical; CheckRatio(0.30); Tab.Split=SplitMode.Horizontal; CheckRatio(0.65); await Task.CompletedTask; });
+        await TestAsync("SPLIT-04", "Window resize preserves the selected ratio", async () => { Host.Size=new Size(930,640); await Task.Delay(150); CheckRatio(0.65); Tab.Split=SplitMode.Vertical; Host.Size=new Size(1180,800); await Task.Delay(150); CheckRatio(0.30); });
+        await TestAsync("SPLIT-05", "Collapse and reopen preserve divider ratio", async () => { Tab.Split=SplitMode.None; Tab.Split=SplitMode.Vertical; await Task.Delay(100); CheckRatio(0.30); });
+        await TestAsync("SPLIT-06", "Edit exit collapses split and reopening restores ratio", async () => { Tab.Split=SplitMode.Horizontal; Tab.ShowFindBar("문단",false,false); await Task.Delay(100); CheckRatio(0.65); Tab.HideFindBar(); Tab.EditMode=true; await Task.Delay(100); CheckRatio(0.65); Tab.EditMode=false; await Task.Delay(100); Require(Tab.Split==SplitMode.None && split.Panel2Collapsed,"Exit did not collapse split"); Tab.Split=SplitMode.Horizontal; CheckRatio(0.65); });
+        await TestAsync("SPLIT-07", "Double-click divider restores equal split", async () => { var r=split.SplitterRectangle; typeof(Control).GetMethod("OnMouseDoubleClick",Flags)!.Invoke(split,new object[]{new MouseEventArgs(MouseButtons.Left,2,r.Left+r.Width/2,r.Top+r.Height/2,0)}); await Task.Delay(100); CheckRatio(0.50); });
+        using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
+        main.Show();
+        typeof(Control).GetMethod("OnKeyDown",Flags)!.Invoke(main,new object[]{new KeyEventArgs(Keys.Control|Keys.N)});
+        var tab=main.GetAllTabs()[0];
+        var edit=(ToolStripMenuItem)typeof(MainForm).GetField("_miEdit",Flags)!.GetValue(main)!;
+        var vert=(ToolStripMenuItem)typeof(MainForm).GetField("_miVert",Flags)!.GetValue(main)!;
+        var horz=(ToolStripMenuItem)typeof(MainForm).GetField("_miHorz",Flags)!.GetValue(main)!;
+        bool IsSingle() => !tab.EditMode && tab.Split==SplitMode.None && ((SplitContainer)typeof(FileTab).GetField("_split",Flags)!.GetValue(tab)!).Panel2Collapsed && !vert.Checked && !horz.Checked;
+        await TestAsync("SPLIT-08", "Context menu exit collapses both split orientations", async () =>
+        {
+            foreach(var mode in new[]{SplitMode.Vertical,SplitMode.Horizontal})
+            { edit.Checked=true; tab.Split=mode; edit.Checked=false; Require(IsSingle(),"Menu exit left split active: "+mode); }
+            await Task.Delay(100);
+        });
+        await TestAsync("SPLIT-09", "F8 exit collapses both split orientations", async () =>
+        {
+            foreach(var mode in new[]{SplitMode.Vertical,SplitMode.Horizontal})
+            { main.ToggleEditMode(); tab.Split=mode; main.ToggleEditMode(); Require(IsSingle(),"F8 exit left split active: "+mode); }
+            await Task.Delay(100);
+        });
+        await TestAsync("WORD-VIEW-01", "Word preparation exits edit mode and preserves unsaved content", async () =>
+        {
+            var editor=(RichTextBox)typeof(FileTab).GetField("_text",Flags)!.GetValue(tab)!;
+            string original=editor.Text;
+            foreach(var mode in new[]{SplitMode.Vertical,SplitMode.Horizontal})
+            {
+                edit.Checked=true; tab.Split=mode;
+                editor.Text="# Word 전환 검증\n\n저장 전 편집 내용";
+                main.EnterViewMode();
+                Require(IsSingle() && !edit.Checked && editor.ReadOnly,"Word preparation left edit or split active: "+mode);
+                Require(editor.Text=="# Word 전환 검증\n\n저장 전 편집 내용","Unsaved source changed");
+            }
+            editor.Text=original;
+            await Task.Delay(100);
+        });
+        await TestAsync("WORD-VIEW-02", "Word preparation collapses viewer splits and is safe to repeat", async () =>
+        {
+            foreach(var item in new[]{vert,horz})
+            {
+                item.Checked=true;
+                main.EnterViewMode(); main.EnterViewMode();
+                Require(IsSingle() && !edit.Checked,"Viewer split or menu check remained active");
+            }
+            await Task.Delay(100);
+        });
+        typeof(FileTab).GetField("_dirty",Flags)!.SetValue(tab,false);
+        tab.DisposeWatch(); main.Close();
+    }
+    static async Task RunWordView()
+    {
+        var oldTheme=Brand.Theme;
+        Brand.Theme=AppTheme.BlueSky;
+        Tab.EditMode=false;
+        XNamespace w="http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        async Task<string> Export(string name,string source)
+        {
+            Text(source);
+            var path=Path.Combine(Artifacts,name+".docx");
+            await Tab.ExportViewDocxAsync(path);
+            using var doc=WordprocessingDocument.Open(path,false);
+            var errors=new OpenXmlValidator().Validate(doc).ToList();
+            Require(errors.Count==0,string.Join("; ",errors.Take(6).Select(e=>e.Description+" at "+e.Path?.XPath)));
+            return doc.MainDocumentPart!.Document.OuterXml;
+        }
+        await TestAsync("THEME-02","BlueSky uses Sogang font in VIEW and native UI",async()=>
+        {
+            await Page("# 글꼴 검증\n\n블루스카이 서강 폰트");
+            Require((await JS("getComputedStyle(document.body).fontFamily")).GetString()!.Contains("SogangUni"),"VIEW font mismatch");
+            using var ui=Brand.Ui(9);
+            using var sg=Brand.Sogang(9);
+            Equal(sg.FontFamily.Name,ui.FontFamily.Name);
+            Equal(sg.FontFamily.Name,Brand.MenuFont.FontFamily.Name);
+            Require((await JS("getComputedStyle(document.body).backgroundColor")).GetString()=="rgb(255, 255, 255)","BlueSky background changed");
+            Tab.ApplyChrome();
+            Equal(sg.FontFamily.Name,Field<TextBox>("_txtFind").Font.FontFamily.Name);
+        });
+        await TestAsync("WORD-RENDER-01","Latest VIEW heading, emphasis and normalized table export as styled Word elements",async()=>
+        {
+            var xml=await Export("view-formatted","# VIEW 제목\n\n**굵게**와 *기울임* 한글\n표 앞 문단\n| 이름 | 값 |\n|---|---|\n| 검사 | 123 |");
+            var x=XDocument.Parse(xml);
+            Require(x.Descendants(w+"tbl").Any(),"Normalized VIEW table missing");
+            Require(x.Descendants(w+"pStyle").Any(e=>(string?)e.Attribute(w+"val")=="Heading1"),"Heading style missing");
+            Require(x.Descendants(w+"b").Any()&&x.Descendants(w+"i").Any(),"Inline formatting missing");
+            Require(x.Descendants(w+"color").Any(e=>(string?)e.Attribute(w+"val")=="0369A1"),"VIEW heading color missing");
+            Require(x.Descendants(w+"rFonts").Any(e=>(string?)e.Attribute(w+"eastAsia")==Brand.Family!.Name),"VIEW Korean font missing");
+            var text=string.Concat(x.Descendants(w+"t").Select(e=>e.Value));
+            Require(text.Contains("VIEW 제목") && !text.Contains("**") && !text.Contains("|---|"),"Source syntax leaked into Word");
+        });
+        await TestAsync("WORD-RENDER-02","Lists, checkboxes, strike and hyperlinks retain rendered content",async()=>
+        {
+            var xml=await Export("view-lists","3. 셋째\n4. 넷째\n\n- [x] 완료\n- [ ] 대기\n\n~~취소~~ [링크](https://example.com)");
+            var x=XDocument.Parse(xml);var text=string.Concat(x.Descendants(w+"t").Select(e=>e.Value));
+            Require(text.Contains("3. ")&&text.Contains("4. ")&&text.Contains("☑")&&text.Contains("☐"),"Rendered list markers missing: "+text);
+            Require(x.Descendants(w+"strike").Any()&&x.Descendants(w+"hyperlink").Any(),"Strike or hyperlink missing");
+        });
+        await TestAsync("WORD-RENDER-03","Code formatting exports line breaks without toolbar or line numbers",async()=>
+        {
+            var xml=await Export("view-code","```csharp\nvar first = 1;\nvar second = 2;\n```");
+            var x=XDocument.Parse(xml);var text=string.Concat(x.Descendants(w+"t").Select(e=>e.Value));
+            Require(text.Contains("var first = 1;")&&text.Contains("var second = 2;"),"Code missing");
+            Require(!text.Contains("Copy")&&!text.Contains("CODE")&&!text.Contains("```"),"Editor or toolbar content exported");
+            Require(x.Descendants(w+"br").Any(),"Code lines concatenated");
+            Require(x.Descendants(w+"rFonts").Any(e=>(string?)e.Attribute(w+"ascii")=="Consolas"),"Code font missing");
+        });
+        await TestAsync("WORD-RENDER-04","Rendered images are embedded, including below the viewport",async()=>
+        {
+            string png;
+            using(var bitmap=new Bitmap(32,24))
+            using(var g=Graphics.FromImage(bitmap))
+            using(var ms=new MemoryStream())
+            {g.Clear(Color.RoyalBlue);bitmap.Save(ms,System.Drawing.Imaging.ImageFormat.Png);png=Convert.ToBase64String(ms.ToArray());}
+            var md="# 이미지\n\n"+string.Join("\n\n",Enumerable.Repeat("스크롤 아래 문단",35))+"\n\n![파란 그림](data:image/png;base64,"+png+")";
+            SetField("_zoomWeb",1.6);
+            string xml;
+            try
+            {
+                xml=await Export("view-image",md);
+                await Wait(async()=>(await JS("document.documentElement.style.zoom")).ToString()=="1.6");
+            }
+            finally { SetField("_zoomWeb",1.0); }
+            Require(xml.Contains("drawing"),"Image drawing missing");
+            XNamespace dw="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+            Require(XDocument.Parse(xml).Descendants(dw+"extent").Any(e=>(string?)e.Attribute("cx")=="304800"),"Viewer zoom changed Word image dimensions");
+            using var doc=WordprocessingDocument.Open(Path.Combine(Artifacts,"view-image.docx"),false);
+            var parts=doc.MainDocumentPart!.ImageParts.ToList();Equal(1,parts.Count);
+            using var stream=parts[0].GetStream();using var bmp=new Bitmap(stream);
+            var pixel=bmp.GetPixel(bmp.Width/2,bmp.Height/2);
+            Require(pixel.B>150&&pixel.R<100,"Captured image did not preserve the displayed blue pixels");
+        });
+        await TestAsync("WORD-RENDER-05","Standalone JSON uses formatted VIEW output",async()=>
+        {
+            var pathProp=typeof(FileTab).GetProperty("Path",Flags)!;
+            var original=Tab.Path;
+            try
+            {
+                pathProp.SetValue(Tab,Path.Combine(Artifacts,"view.json"));
+                var xml=await Export("view-json","{\"name\":\"한글\",\"items\":[1,2]}");
+                var x=XDocument.Parse(xml);var text=string.Concat(x.Descendants(w+"t").Select(e=>e.Value));
+                Require(text.Contains("name")&&text.Contains("items")&&!text.Contains("Copy JSON"),"JSON VIEW content missing");
+                Require(x.Descendants(w+"br").Count()>=4,"Formatted JSON newlines missing");
+            }
+            finally {pathProp.SetValue(Tab,original);}
+        });
+        await TestAsync("WORD-RENDER-06","Immediate unsaved edits replace stale preview in Word",async()=>
+        {
+            await Page("# 이전 내용");
+            var xml=await Export("view-latest","# 방금 수정한 내용\n\n최신 본문");
+            Require(xml.Contains("방금 수정한 내용")&&!xml.Contains("이전 내용"),"Stale preview exported");
+            Require(Editor.Text.Contains("최신 본문")&&Tab.Dirty,"Export changed the unsaved document state");
+        });
+        await TestAsync("WORD-RENDER-07","Rendered equations export once as embedded visual content",async()=>
+        {
+            var xml=await Export("view-math","# 수식\n\n$$\nx^2 + \\frac{1}{2}\n$$");
+            Require((await JS("document.querySelectorAll('.katex').length")).GetInt32()>0,"KaTeX rendering unavailable");
+            var x=XDocument.Parse(xml);
+            Equal(1,x.Descendants(w+"drawing").Count());
+            Require(!string.Concat(x.Descendants(w+"t").Select(e=>e.Value)).Contains("frac"),"Raw equation source leaked into Word");
+        });
+        Brand.Theme=oldTheme;
+    }
+
+    static async Task RunForestTheme()
+    {
+        var originalTheme=Brand.Theme;
+        string source="# 포레스트 그린\n\n[초록 링크](https://example.com)\n\n- [x] 완료한 항목\n\n> 차분한 초록 인용문\n\n| 항목 | 값 |\n|---|---|\n| 본문 | 서강 글꼴 |";
+        try
+        {
+            Brand.Theme=AppTheme.ForestGreen;
+            await TestAsync("FOREST-01","Forest palette, Sogang font and white background apply to VIEW",async()=>
+            {
+                Tab.ApplyChrome();await Page(source);
+                Equal(Color.White.ToArgb(),Brand.Wash.ToArgb());
+                foreach(var selector in new[]{"h1","a"})
+                    Equal("rgb(47, 107, 79)",(await JS("getComputedStyle(document.querySelector('"+selector+"')).color")).GetString());
+                foreach(var selector in new[]{"th","blockquote"})
+                    Equal("rgb(234, 244, 238)",(await JS("getComputedStyle(document.querySelector('"+selector+"')).backgroundColor")).GetString());
+                Equal("rgb(255, 255, 255)",(await JS("getComputedStyle(document.body).backgroundColor")).GetString());
+                Equal("rgb(37, 51, 43)",(await JS("getComputedStyle(document.body).color")).GetString());
+                Equal("rgb(189, 213, 197)",(await JS("getComputedStyle(document.querySelector('th')).borderTopColor")).GetString());
+                Equal("rgb(47, 107, 79)",(await JS("getComputedStyle(document.querySelector('input')).accentColor")).GetString());
+                Require((await JS("getComputedStyle(document.body).fontFamily")).ToString().Contains("SogangUni"),"VIEW font mismatch");
+                using var font=Brand.Sogang(9); Equal(font.FontFamily.Name,Brand.MenuFont.FontFamily.Name);
+                Equal(font.FontFamily.Name,Field<TextBox>("_txtFind").Font.FontFamily.Name);
+                await Wait(async()=>(await JS("document.fonts.status")).ToString()=="loaded");
+                using var screenshot=File.Create(Path.Combine(Artifacts,"forest-preview.png"));
+                await Web.CoreWebView2.CapturePreviewAsync(Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png,screenshot);
+            });
+            await TestAsync("FOREST-02","Four themes share one submenu, exclusive checks and settings restore",async()=>
+            {
+                var settings=(string)typeof(Brand).GetProperty("ThemePath",Flags)!.GetValue(null)!;
+                var before=File.Exists(settings)?File.ReadAllBytes(settings):null;
+                try
+                {
+                    using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
+                    main.Show();
+                    var menu=(ContextMenuStrip)typeof(MainForm).GetField("_menu",Flags)!.GetValue(main)!;
+                    var group=menu.Items.OfType<ToolStripMenuItem>().Single(i=>i.Text=="테마");
+                    Equal(4,group.DropDownItems.Count);
+                    foreach(var (field,theme) in new[]{("_miSogang",AppTheme.Sogang),("_miAlba",AppTheme.Albatross),("_miBlueSky",AppTheme.BlueSky),("_miForestGreen",AppTheme.ForestGreen)})
+                    {
+                        var item=(ToolStripMenuItem)typeof(MainForm).GetField(field,Flags)!.GetValue(main)!;
+                        Require(!menu.Items.Contains(item)&&group.DropDownItems.Contains(item),"Theme remained in root menu");
+                        item.PerformClick();Equal(theme,Brand.Theme);
+                        Require(item.Checked && group.DropDownItems.OfType<ToolStripMenuItem>().Count(i=>i.Checked)==1,"Theme checks not exclusive");
+                        item.PerformClick();Require(item.Checked,"Current theme became unchecked");
+                    }
+                    Equal("ForestGreen",File.ReadAllText(settings));
+                    Brand.Theme=AppTheme.Sogang;Brand.LoadTheme();Equal(AppTheme.ForestGreen,Brand.Theme);
+                    foreach(ToolStripItem item in group.DropDownItems)Equal(Brand.MenuFont.FontFamily.Name,item.Font.FontFamily.Name);
+                    // Use actual popup bounds through the same outside-click handler as PreFilterMessage.
+                    // PerformClick alone bypasses that input path and missed the submenu dismissal bug.
+                    menu.Opacity=0;group.DropDown.Opacity=0;
+                    var handleOutside=typeof(MainForm).GetMethod("CloseMenuIfOutside",Flags)!;
+                    foreach(ToolStripMenuItem item in group.DropDownItems)
+                    {
+                        menu.Show(main,new Point(10,10));group.ShowDropDown();
+                        Require(menu.Visible&&group.DropDown.Visible,"Submenu did not open");
+                        var click=group.DropDown.PointToScreen(new Point(item.Bounds.Left+item.Width/2,item.Bounds.Top+item.Height/2));
+                        Require(!menu.Bounds.Contains(click),"Test point must be outside the parent popup");
+                        handleOutside.Invoke(main,new object[]{click});
+                        Require(menu.Visible&&group.DropDown.Visible,"Submenu click prematurely closed menu");
+                        item.PerformClick();Require(item.Checked,"Submenu selection was lost");
+                        menu.Close();
+                    }
+                    menu.Show(main,new Point(10,10));group.ShowDropDown();
+                    using(var screenshot=new Bitmap(group.DropDown.Width,group.DropDown.Height))
+                    {
+                        group.DropDown.DrawToBitmap(screenshot,new Rectangle(Point.Empty,screenshot.Size));
+                        screenshot.Save(Path.Combine(Artifacts,"theme-menu-preview.png"),System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    handleOutside.Invoke(main,new object[]{new Point(menu.Bounds.Left+8,menu.Bounds.Top+8)});
+                    Require(menu.Visible,"Parent menu click closed menu");
+                    group.HideDropDown();
+                    var outside=new Point(Math.Max(menu.Bounds.Right,group.DropDown.Bounds.Right)+100,Math.Max(menu.Bounds.Bottom,group.DropDown.Bounds.Bottom)+100);
+                    handleOutside.Invoke(main,new object[]{outside});
+                    Require(!menu.Visible,"Outside click did not dismiss menu");
+                    main.Close();
+                }
+                finally
+                {
+                    if(before!=null)File.WriteAllBytes(settings,before);
+                    else if(File.Exists(settings))File.Delete(settings);
+                }
+                await Task.CompletedTask;
+            });
+            await TestAsync("FOREST-03","Forest colors and Sogang font survive VIEW to Word conversion",async()=>
+            {
+                Brand.Theme=AppTheme.ForestGreen;Text(source);Tab.EditMode=false;
+                var path=Path.Combine(Artifacts,"view-forest.docx");await Tab.ExportViewDocxAsync(path);
+                using var doc=WordprocessingDocument.Open(path,false);
+                Require(!new OpenXmlValidator().Validate(doc).Any(),"Invalid Word document");
+                var xml=doc.MainDocumentPart!.Document.OuterXml;
+                Require(xml.Contains("2F6B4F")&&xml.Contains("EAF4EE")&&xml.Contains("BDD5C5"),"Forest colors missing in Word");
+                Equal(4,doc.MainDocumentPart.Document.Descendants<DocumentFormat.OpenXml.Wordprocessing.TableCell>().Count());
+                Require(xml.Contains(Brand.Family!.Name),"Sogang font missing in Word");
+            });
+        }
+        finally { Brand.Theme=originalTheme; }
+    }
+
+    static async Task RunThemeDirtyState()
+    {
+        var originalTheme=Brand.Theme;
+        var settings=(string)typeof(Brand).GetProperty("ThemePath",Flags)!.GetValue(null)!;
+        var before=File.Exists(settings)?File.ReadAllBytes(settings):null;
+        using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
+        try
+        {
+            main.Show();
+            var fixtures=new List<(FileTab tab,RichTextBox editor,string original,byte[] bytes)>();
+            foreach(var (name,newline) in new[]{("crlf","\r\n"),("lf","\n"),("cr","\r")})
+            {
+                var path=Path.Combine(Artifacts,"theme-dirty-"+name+".md");
+                File.WriteAllText(path,string.Join(newline,new[]{"# 읽기 전용 문서","","테마만 변경",""}),new System.Text.UTF8Encoding(false));
+                main.OpenFile(path);
+                var tab=main.GetAllTabs().Last();
+                var editor=(RichTextBox)typeof(FileTab).GetField("_text",Flags)!.GetValue(tab)!;
+                _=editor.Handle;
+                fixtures.Add((tab,editor,editor.Text,File.ReadAllBytes(path)));
+            }
+            var items=new[]{"_miSogang","_miAlba","_miBlueSky","_miForestGreen"}.Select(field=>(ToolStripMenuItem)typeof(MainForm).GetField(field,Flags)!.GetValue(main)!).ToArray();
+            await TestAsync("DIRTY-01","Changing all four themes never marks unopened editors or rewrites files",async()=>
+            {
+                foreach(var item in items)
+                {
+                    item.PerformClick();
+                    foreach(var f in fixtures)
+                    {
+                        Require(!f.tab.EditMode,"Fixture entered edit mode");
+                        Equal(f.original,f.editor.Text);
+                        Require(f.bytes.SequenceEqual(File.ReadAllBytes(f.tab.Path)),"Theme modified disk file");
+                        var baseline=(string)typeof(FileTab).GetField("_loaded",Flags)!.GetValue(f.tab)!;
+                        Require(!f.tab.Dirty,"Theme marked clean "+Path.GetFileName(f.tab.Path)+" dirty; baseline="+JsonSerializer.Serialize(baseline)+" editor="+JsonSerializer.Serialize(f.editor.Text));
+                        Require(!f.tab.HostPage!.Text.EndsWith("*"),"Tab incorrectly shows dirty star");
+                    }
+                }
+                await Task.CompletedTask;
+            });
+            await TestAsync("DIRTY-02","Theme changes preserve genuine unsaved edits and reverting content clears dirty",async()=>
+            {
+                var f=fixtures[0];main.SelectTabByIndex(0);f.tab.EditMode=true;
+                f.editor.AppendText("실제 편집 내용");var modified=f.editor.Text;
+                Require(f.tab.Dirty,"Real edit did not set dirty");
+                foreach(var item in items)
+                {
+                    item.PerformClick();Equal(modified,f.editor.Text);
+                    Require(f.tab.Dirty&&f.tab.HostPage!.Text.EndsWith("*"),"Theme cleared genuine dirty state");
+                }
+                f.editor.Text=f.original;
+                Require(!f.tab.Dirty&&!f.tab.HostPage!.Text.EndsWith("*"),"Reverting original content left dirty state");
+                Require(f.bytes.SequenceEqual(File.ReadAllBytes(f.tab.Path)),"Unsaved edits changed disk file");
+                await Task.CompletedTask;
+            });
+            await TestAsync("CHROME-01","Thin theme line stays below tabs across themes, layout and resizing",async()=>
+            {
+                var f=fixtures[0];main.SelectTabByIndex(0);f.tab.EditMode=false;
+                var line=(Panel)typeof(FileTab).GetField("_themeLine",Flags)!.GetValue(f.tab)!;
+                var split=(SplitContainer)typeof(FileTab).GetField("_split",Flags)!.GetValue(f.tab)!;
+                var footer=(Panel)typeof(MainForm).GetField("_footBand",Flags)!.GetValue(main)!;
+                void Check()
+                {
+                    Require(line.Visible && line.Top==0 && line.Height==2,"Theme line not at the top with 2px height");
+                    Equal(f.tab.ClientSize.Width,line.Width);
+                    Equal(footer.BackColor.ToArgb(),line.BackColor.ToArgb());
+                    Require(split.Top>=line.Bottom,"Document overlaps the theme line");
+                }
+                foreach(var item in items){item.PerformClick();Check();}
+                f.tab.ShowFindBar("테마",false,false);f.tab.HighlightBarVisible=true;Check();
+                f.tab.EditMode=true;f.tab.Split=SplitMode.Vertical;Check();
+                f.tab.Split=SplitMode.Horizontal;Check();
+                main.Size=new Size(920,650);Check();
+                f.tab.EditMode=false;f.tab.HideFindBar();f.tab.HighlightBarVisible=false;Check();
+                Require(!f.tab.Dirty,"Layout or theme line caused dirty state");
+                await Task.CompletedTask;
+            });
+        }
+        finally
+        {
+            foreach(var tab in main.GetAllTabs())
+            { typeof(FileTab).GetField("_dirty",Flags)!.SetValue(tab,false);tab.DisposeWatch(); }
+            main.Close();Brand.Theme=originalTheme;
+            if(before!=null)File.WriteAllBytes(settings,before);
+            else if(File.Exists(settings))File.Delete(settings);
+        }
+    }
+
+    static async Task RunHomeSample()
+    {
+        string directory=Path.Combine(Root,"obj","verification","sample-"+Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path=Path.Combine(directory,"test-sample.md");
+        await TestAsync("HOME-01","Missing sample is extracted from embedded bytes without side files",async()=>
+        {
+            Equal(path,MainForm.EnsureTestSampleFile(directory));
+            Require(File.ReadAllBytes(Path.Combine(Root,"test-sample.md")).SequenceEqual(File.ReadAllBytes(path)),"Embedded sample differs from current repository sample");
+            Equal(1,Directory.GetFiles(directory).Length);
+            await Task.CompletedTask;
+        });
+        await TestAsync("HOME-02","Existing read-only sample contents and timestamp are preserved",async()=>
+        {
+            File.WriteAllText(path,"# 사용자가 수정한 샘플\r\n기존 내용을 보존",new System.Text.UTF8Encoding(false));
+            var bytes=File.ReadAllBytes(path);
+            File.SetLastWriteTimeUtc(path,new DateTime(2020,1,2,3,4,5,DateTimeKind.Utc));
+            var time=File.GetLastWriteTimeUtc(path);
+            File.SetAttributes(path,File.GetAttributes(path)|FileAttributes.ReadOnly);
+            try
+            {
+                Equal(path,MainForm.EnsureTestSampleFile(directory));
+                Require(bytes.SequenceEqual(File.ReadAllBytes(path)),"Existing file overwritten");
+                Equal(time,File.GetLastWriteTimeUtc(path));
+            }
+            finally { File.SetAttributes(path,FileAttributes.Normal); }
+            await Task.CompletedTask;
+        });
+        await TestAsync("HOME-03","Home link opens executable-folder sample and follows theme styling",async()=>
+        {
+            string exeSample=Path.Combine(AppContext.BaseDirectory,"test-sample.md");
+            var backup=File.Exists(exeSample)?File.ReadAllBytes(exeSample):null;
+            var time=backup!=null?File.GetLastWriteTimeUtc(exeSample):DateTime.MinValue;
+            var cwd=Environment.CurrentDirectory;
+            using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
+            try
+            {
+                File.WriteAllText(exeSample,"# 실행 파일 폴더의 기존 샘플\n본문 유지",new System.Text.UTF8Encoding(false));
+                var expected=File.ReadAllBytes(exeSample);
+                Environment.CurrentDirectory=directory;
+                main.Show();
+                var link=(Label)typeof(MainForm).GetField("_sampleLink",Flags)!.GetValue(main)!;
+                var association=(Label)typeof(MainForm).GetField("_link",Flags)!.GetValue(main)!;
+                Require(link.Visible && link.Text=="test-sample.md 열기","Home sample link missing");
+                Require(link.Top>association.Bottom && link.Left==association.Left,"Home links overlap");
+                Equal(Brand.Cardinal.ToArgb(),link.ForeColor.ToArgb());
+                Equal(association.Font.FontFamily.Name,link.Font.FontFamily.Name);
+                typeof(Control).GetMethod("OnClick",Flags)!.Invoke(link,new object[]{EventArgs.Empty});
+                var tab=main.GetAllTabs().Single();Equal(exeSample,tab.Path);
+                Require(!tab.EditMode&&!tab.Dirty,"Sample did not open in clean VIEW mode");
+                var editor=(RichTextBox)typeof(FileTab).GetField("_text",Flags)!.GetValue(tab)!;
+                Require(editor.Text.Contains("실행 파일 폴더의 기존 샘플"),"Wrong sample opened");
+                Require(expected.SequenceEqual(File.ReadAllBytes(exeSample)),"Click overwrote existing sample");
+                Require(File.ReadAllText(path).Contains("사용자가 수정한 샘플"),"Working directory sample changed");
+            }
+            finally
+            {
+                foreach(var tab in main.GetAllTabs()){tab.DisposeWatch();typeof(FileTab).GetField("_dirty",Flags)!.SetValue(tab,false);}
+                main.Close();Environment.CurrentDirectory=cwd;
+                if(backup!=null){File.WriteAllBytes(exeSample,backup);File.SetLastWriteTimeUtc(exeSample,time);}
+                else if(File.Exists(exeSample))File.Delete(exeSample);
+            }
+            await Task.CompletedTask;
+        });
+    }
+
+    static async Task RunEditorIsolation()
+    {
+        string source="# 커서 보존\n\n"+string.Join("\n\n",Enumerable.Range(1,90).Select(i=>$"문단 {i:D2} 편집 위치를 보존하는 긴 문서입니다."));
+        async Task Prepare(string? value=null)
+        {
+            Tab.EditMode=true;Tab.Split=SplitMode.Vertical;
+            Text(value??source);await Page(Editor.Text);
+            Editor.Select(Editor.Text.IndexOf("문단 45",StringComparison.Ordinal)+6,5);
+            Editor.ScrollToCaret();Editor.Focus();
+            await Task.Delay(250);
+            // Establish a deliberate editor selection after any navigation callbacks finish.
+            Editor.Select(Editor.Text.IndexOf("문단 45",StringComparison.Ordinal)+6,5);
+            Editor.Focus();await Task.Delay(120);
+            Require(Editor.Focused,"Editor did not receive keyboard focus");
+        }
+        (int start,int length,int top) Snapshot() => (Editor.SelectionStart,Editor.SelectionLength,Native.EditorFirstLine(Editor));
+        void Check((int start,int length,int top) expected)
+        {
+            Equal(expected.start,Editor.SelectionStart);Equal(expected.length,Editor.SelectionLength);
+            Equal(expected.top,Native.EditorFirstLine(Editor));Require(Editor.Focused,"Preview stole keyboard focus");
+        }
+        await TestAsync("CARET-01","Late preview position messages cannot move the editing caret",async()=>
+        {
+            await Prepare();var expected=Snapshot();
+            foreach(var web in new[]{Web,Field<WebView2>("_web2")})
+            {
+                await web.ExecuteScriptAsync("chrome.webview.postMessage(JSON.stringify({t:'line',ln:150}));chrome.webview.postMessage(JSON.stringify({t:'clickLine',ln:1}));chrome.webview.postMessage(JSON.stringify({t:'heading',h:'커서 보존'}));");
+                await Task.Delay(200);Check(expected);
+            }
+        });
+        await TestAsync("CARET-02","Preview scroll and synthetic click preserve selection and editor viewport",async()=>
+        {
+            await Prepare();var expected=Snapshot();
+            await JS("(window.__scrolls=0,window.addEventListener('scroll',()=>window.__scrolls++),window.scrollTo(0,document.documentElement.scrollHeight),true)");
+            await Wait(async()=>(await JS("window.__scrolls")).GetInt32()>0);
+            await Task.Delay(160);Check(expected);
+            await JS("(document.querySelector('h1').click(),true)");await Task.Delay(150);Check(expected);
+        });
+        await TestAsync("CARET-03","Delayed tall image layout after live refresh cannot redirect subsequent input",async()=>
+        {
+            string Svg(int height)=>"data:image/svg+xml;base64,"+Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"<svg xmlns='http://www.w3.org/2000/svg' width='64' height='{height}'><rect width='64' height='{height}' fill='green'/></svg>"));
+            string value="<img id='late-image' src='"+Svg(12)+"'>\n\n"+source;
+            await Prepare(value);
+            var expected=Snapshot();
+            Tab.RefreshPreview();await Task.Delay(160);
+            string large=JsonSerializer.Serialize(Svg(1800));
+            await JS("(window.__imageReady=false,setTimeout(()=>{const i=document.getElementById('late-image');i.onload=()=>{window.__imageReady=true;};i.src="+large+";},220),true)");
+            await Wait(async()=>(await JS("window.__imageReady && document.getElementById('late-image').naturalHeight===1800")).GetBoolean());
+            await Task.Delay(220);Check(expected);
+            var before=Editor.Text;const string input="입력 위치 유지";
+            Editor.SelectedText=input;
+            Equal(before.Remove(expected.start,expected.length).Insert(expected.start,input),Editor.Text);
+        });
+        await TestAsync("CARET-04","Repeated typing, refresh and resize leave insertion at the intended location",async()=>
+        {
+            await Prepare();Editor.SelectionLength=0;
+            var expectedText=Editor.Text;int cursor=Editor.SelectionStart;
+            foreach(var input in new[]{"한","글"," ","입","력","\n","계","속"})
+            {
+                Editor.SelectedText=input;expectedText=expectedText.Insert(cursor,input);cursor+=input.Length;
+                Tab.RefreshPreview();
+                await JS("(document.querySelector('.md').style.paddingTop='"+(120+cursor%5*100)+"px',window.scrollTo(0,0),true)");
+                await Task.Delay(120);
+                Equal(expectedText,Editor.Text);Equal(cursor,Editor.SelectionStart);Equal(0,Editor.SelectionLength);
+                Require(Editor.Focused,"Preview stole typing focus");
+            }
+            var before=Snapshot();Host.Size=new Size(1080,760);await Task.Delay(150);
+            Equal(before.start,Editor.SelectionStart);Equal(before.length,Editor.SelectionLength);
+        });
+        async Task RealClick(string selector)
+        {
+            await JS("(()=>{const e=document.querySelector("+JsonSerializer.Serialize(selector)+");e.scrollIntoView({block:'center'});window.getSelection().removeAllRanges();window.__lastTrustedClick=false;document.addEventListener('click',ev=>window.__lastTrustedClick=ev.isTrusted,{once:true,capture:true});return true;})()");
+            await Task.Delay(120);
+            var point=await JS("(()=>{const r=document.querySelector("+JsonSerializer.Serialize(selector)+").getBoundingClientRect();return {x:r.left+Math.min(12,r.width/2),y:r.top+r.height/2};})()");
+            double x=point.GetProperty("x").GetDouble(),y=point.GetProperty("y").GetDouble();
+            Web.Focus();
+            foreach(var type in new[]{"mousePressed","mouseReleased"})
+                await Web.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchMouseEvent",JsonSerializer.Serialize(new {type,x,y,button="left",clickCount=1}));
+            await Wait(async()=>(await JS("window.__lastTrustedClick===true")).GetBoolean());
+            await Task.Delay(150);
+        }
+        await TestAsync("CLICK-01","Trusted VIEW click navigates to a logical source line after wrapped text",async()=>
+        {
+            var value="# 시작\n\n"+string.Join(" ",Enumerable.Repeat("아주 긴 문단의 자동 줄바꿈 확인",60))+"\n\n## 클릭할 제목\n\n클릭한 뒤 여기에 입력";
+            Tab.EditMode=true;Tab.Split=SplitMode.Vertical;Text(value);await Page(value);
+            Editor.Select(0,0);Editor.Focus();await Task.Delay(160);
+            var expected=Editor.Text.IndexOf("## 클릭할 제목",StringComparison.Ordinal);
+            Require(Editor.GetLineFromCharIndex(expected)>FileTab.GetLogicalLine(Editor.Text,expected),"Wrapped text precondition missing");
+            await RealClick("h2");
+            Equal(expected,Editor.SelectionStart);Equal(0,Editor.SelectionLength);Require(Editor.Focused,"Editor did not receive focus after click");
+            var original=Editor.Text;Editor.SelectedText="확인 ";Equal(original.Insert(expected,"확인 "),Editor.Text);
+        });
+        await TestAsync("CLICK-02","Trusted table cell click maps through inserted Markdown blank lines",async()=>
+        {
+            const string value="앞 문단\n| 이름 | 값 |\n|---|---|\n| row | 123 |\n\n끝 문단";
+            Tab.EditMode=true;Tab.Split=SplitMode.Horizontal;Text(value);await Page(value);
+            Editor.Select(0,0);Editor.Focus();await Task.Delay(160);
+            await RealClick("tbody td");
+            Equal(Editor.Text.IndexOf("| row |",StringComparison.Ordinal),Editor.SelectionStart);
+            Require(Editor.Focused,"Table click did not focus editor");
+        });
+        await TestAsync("CLICK-03","Interactive controls and VIEW-only mode never reposition editor",async()=>
+        {
+            const string value="# 제목\n\n원래 편집 위치\n\n<button id='sample-action'>버튼</button>";
+            Tab.EditMode=true;Tab.Split=SplitMode.Vertical;Text(value);await Page(value);
+            Editor.Select(Editor.Text.IndexOf("원래",StringComparison.Ordinal),2);Editor.Focus();await Task.Delay(150);
+            var before=Snapshot();
+            await JS("(window.__buttonClicks=0,document.getElementById('sample-action').addEventListener('click',()=>window.__buttonClicks++),true)");
+            await RealClick("#sample-action");Equal(1,(await JS("window.__buttonClicks")).GetInt32());
+            Equal(before.start,Editor.SelectionStart);Equal(before.length,Editor.SelectionLength);
+            Tab.EditMode=false;await Page(value);before=Snapshot();
+            await RealClick("h1");
+            Require(!Tab.EditMode,"Click enabled editing in VIEW mode");
+            Equal(before.start,Editor.SelectionStart);Equal(before.length,Editor.SelectionLength);
+        });
+        Tab.EditMode=false;
+    }
+
+}

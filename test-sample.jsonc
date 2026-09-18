@@ -1,0 +1,16 @@
+{
+  // JSONC 주석과 trailing comma 테스트
+  "name": "MDviewer",
+  "version": 1.3,
+  "enabled": true,
+  "description": null,
+  "features": [
+    "task",
+    "footnote",
+    "callout"
+  ],
+  "theme": {
+    "key": "색상 구분",
+    "compact": false
+  },
+}
