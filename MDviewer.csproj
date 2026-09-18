@@ -31,8 +31,6 @@
     <EmbeddedResource Include="assets\albatross.png" />
     <EmbeddedResource Include="assets\campus.png" />
     <EmbeddedResource Include="assets\campus_light.png" />
-    <EmbeddedResource Include="assets\assoc_guide.png" />
-    <EmbeddedResource Include="assets\스크린샷_기본앱등록.png" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Markdig" Version="0.41.3" />

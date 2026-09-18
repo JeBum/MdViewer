@@ -155,8 +155,8 @@ sealed class MainForm : Form, IMessageFilter
     readonly PictureBox _bird = new() { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent, Anchor = AnchorStyles.Top | AnchorStyles.Right };
     readonly PictureBox _logoFooter = new() { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent, Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
     readonly Label _intro = new();
-    readonly Label _link = new();
     readonly Label _sampleLink = new();
+    readonly Label _githubLink = new();
     readonly Label _help = new();
     readonly Label _helpTitle = new();
     readonly Label _helpMouse = new();
@@ -445,13 +445,6 @@ sealed class MainForm : Form, IMessageFilter
         _intro.Location = new Point(28, 10);
         _intro.Anchor = AnchorStyles.Top | AnchorStyles.Left;
         _intro.BackColor = Color.Transparent;
-        _link.Text = "md 파일 연결프로그램 등록";
-        _link.AutoSize = true;
-        _link.Cursor = Cursors.Hand;
-        _link.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-        _link.BackColor = Color.Transparent;
-        _link.UseCompatibleTextRendering = true;
-        _link.Click += (_, _) => RegisterMdAssociation();
         _sampleLink.Text = "test-sample.md 열기";
         _sampleLink.AutoSize = true;
         _sampleLink.Cursor = Cursors.Hand;
@@ -459,6 +452,14 @@ sealed class MainForm : Form, IMessageFilter
         _sampleLink.BackColor = Color.Transparent;
         _sampleLink.UseCompatibleTextRendering = true;
         _sampleLink.Click += (_, _) => OpenTestSample();
+        _githubLink.Text = "GitHub 저장소";
+        _githubLink.AutoSize = true;
+        _githubLink.Cursor = Cursors.Hand;
+        _githubLink.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+        _githubLink.BackColor = Color.Transparent;
+        _githubLink.UseCompatibleTextRendering = true;
+        _githubLink.Tag = "https://github.com/JeBum/MdViewer";
+        _githubLink.Click += (_, _) => FileTab.OpenExternalUrl(_githubLink.Tag as string);
         _helpTitle.Text = "단축키";
         _helpTitle.AutoSize = true;
         _helpTitle.BackColor = Color.Transparent;
@@ -504,8 +505,8 @@ sealed class MainForm : Form, IMessageFilter
         _helpMouse.ForeColor = Brand.Ink;
         _home.Resize += (_, _) => LayoutHome();
         _home.Controls.Add(_intro);
-        _home.Controls.Add(_link);
         _home.Controls.Add(_sampleLink);
+        _home.Controls.Add(_githubLink);
         _home.Controls.Add(_helpTitle);
         _home.Controls.Add(_help);
         _home.Controls.Add(_helpMouseTitle);
@@ -525,7 +526,8 @@ sealed class MainForm : Form, IMessageFilter
     void ApplyHomeFonts()
     {
         _intro.UseCompatibleTextRendering = true;
-        _link.UseCompatibleTextRendering = true;
+        _sampleLink.UseCompatibleTextRendering = true;
+        _githubLink.UseCompatibleTextRendering = true;
         _helpTitle.UseCompatibleTextRendering = true;
         _help.UseCompatibleTextRendering = true;
         _helpMouseTitle.UseCompatibleTextRendering = true;
@@ -534,15 +536,15 @@ sealed class MainForm : Form, IMessageFilter
         Font F(float em, FontStyle st = FontStyle.Regular) =>
             sg ? Brand.Sogang(em, st) : new Font("Segoe UI", em, st, GraphicsUnit.Point);
         _intro.Font = F(10f);
-        _link.Font = F(10f, FontStyle.Underline);
         _sampleLink.Font = F(10f, FontStyle.Underline);
+        _githubLink.Font = F(10f, FontStyle.Underline);
         _helpTitle.Font = F(10f, FontStyle.Bold);
         _help.Font = F(8f);
         _helpMouseTitle.Font = F(10f, FontStyle.Bold);
         _helpMouse.Font = F(8f);
         _intro.ForeColor = Brand.Ink;
-        _link.ForeColor = Brand.Cardinal;
         _sampleLink.ForeColor = Brand.Cardinal;
+        _githubLink.ForeColor = Brand.Cardinal;
         _helpTitle.ForeColor = Brand.Ink;
         _help.ForeColor = Brand.Ink;
         _helpMouseTitle.ForeColor = Brand.Ink;
@@ -564,8 +566,8 @@ sealed class MainForm : Form, IMessageFilter
             w / 2,
             _campus.Top + (int)(campH * 0.28));
         _logoFooter.Location = new Point(w - _logoFooter.Width - 24, h - _logoFooter.Height - 20);
-        _link.Location = new Point(_intro.Left, _intro.Bottom + _intro.Font.Height);
-        _sampleLink.Location = new Point(_link.Left, _link.Bottom + 10);
+        _sampleLink.Location = new Point(_intro.Left, _intro.Bottom + _intro.Font.Height);
+        _githubLink.Location = new Point(_sampleLink.Left, _sampleLink.Bottom + 10);
         int blockH = _helpTitle.Height + 2 + Math.Max(_help.Height, _helpMouse.Height);
         int helpY = Math.Max(80, h - blockH - 8);
         _helpTitle.Location = new Point(28, helpY);
@@ -575,8 +577,8 @@ sealed class MainForm : Form, IMessageFilter
         _helpMouse.Location = new Point(mouseX, helpY + _helpMouseTitle.Height + 2);
         _bird.BringToFront();
         _intro.BringToFront();
-        _link.BringToFront();
         _sampleLink.BringToFront();
+        _githubLink.BringToFront();
         _helpTitle.BringToFront();
         _help.BringToFront();
         _helpMouseTitle.BringToFront();
@@ -615,53 +617,6 @@ sealed class MainForm : Form, IMessageFilter
             return path;
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
-    }
-
-    void RegisterMdAssociation()
-    {
-        try
-        {
-            var exe = Environment.ProcessPath ?? Application.ExecutablePath;
-            if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe))
-                throw new InvalidOperationException("실행 파일 경로를 찾지 못했습니다.\npublish\\MDviewer.exe로 실행하세요.");
-            exe = System.IO.Path.GetFullPath(exe);
-            const string progId = "MDviewer.markdown";
-            string cmd = "\"" + exe + "\" \"%1\"";
-            string icon = "\"" + exe + "\",0";
-
-            void Put(string path, string name, object value)
-            {
-                using var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(path);
-                k.SetValue(name, value);
-            }
-
-            Put(@"Software\Classes\.md", "", progId);
-            Put(@"Software\Classes\.md\OpenWithProgids", progId, "");
-            Put(@"Software\Classes\.markdown", "", progId);
-            Put(@"Software\Classes\.markdown\OpenWithProgids", progId, "");
-            Put(@"Software\Classes\" + progId, "", "Markdown Document");
-            Put(@"Software\Classes\" + progId + @"\DefaultIcon", "", icon);
-            Put(@"Software\Classes\" + progId + @"\shell", "", "open");
-            Put(@"Software\Classes\" + progId + @"\shell\open", "", "MDviewer로 열기");
-            Put(@"Software\Classes\" + progId + @"\shell\open\command", "", cmd);
-            Put(@"Software\Classes\Applications\MDviewer.exe\shell\open\command", "", cmd);
-            Put(@"Software\MDviewer\Capabilities", "ApplicationName", "MDviewer");
-            Put(@"Software\MDviewer\Capabilities", "ApplicationDescription", "Markdown viewer");
-            Put(@"Software\MDviewer\Capabilities\FileAssociations", ".md", progId);
-            Put(@"Software\MDviewer\Capabilities\FileAssociations", ".markdown", progId);
-            Put(@"Software\RegisteredApplications", "MDviewer", @"Software\MDviewer\Capabilities");
-            Put(@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithProgids", progId, "");
-            Put(@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.markdown\OpenWithProgids", progId, "");
-
-            Native.NotifyAssocChanged();
-
-            using var dlg = new AssocGuideDialog();
-            dlg.ShowDialog(this);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, ex.Message, "연결 등록 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
     }
 
     void BuildMenu()
@@ -1115,110 +1070,6 @@ sealed class MainForm : Form, IMessageFilter
         if (e.Data?.GetDataPresent(DataFormats.FileDrop) != true) return null;
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] files) return null;
         return files.FirstOrDefault(IsSupportedDocument);
-    }
-}
-
-sealed class AssocGuideDialog : Form
-{
-    public AssocGuideDialog()
-    {
-        Text = "MDviewer - .md 연결 프로그램 등록 안내";
-        Width = 590;
-        Height = 440;
-        StartPosition = FormStartPosition.CenterParent;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        MinimizeBox = false;
-        ShowInTaskbar = false;
-        BackColor = Brand.Paper;
-        Font = Brand.Ui(9f);
-
-        var topPanel = new Panel { Dock = DockStyle.Top, Height = 95, Padding = new Padding(20, 16, 20, 8), BackColor = Brand.Wash };
-        var lblTitle = new Label
-        {
-            Text = "MDviewer를 .md 연결 프로그램으로 등록했습니다.",
-            Dock = DockStyle.Top,
-            Height = 26,
-            Font = Brand.Ui(11f, FontStyle.Bold),
-            ForeColor = Brand.Theme == AppTheme.Sogang ? Brand.Cardinal : Color.FromArgb(20, 20, 20)
-        };
-        var lblDesc = new Label
-        {
-            Text = "Windows 11은 기본 앱 설정을 사용자가 한 번 직접 지정해야 합니다.\n아래 가이드 화면처럼 기본 앱 설정에서 .md 검색 후 MDviewer를 선택하세요.",
-            Dock = DockStyle.Fill,
-            Font = Brand.Ui(9f),
-            ForeColor = Brand.Ink
-        };
-        topPanel.Controls.Add(lblDesc);
-        topPanel.Controls.Add(lblTitle);
-
-        var pic = new PictureBox
-        {
-            Dock = DockStyle.Fill,
-            SizeMode = PictureBoxSizeMode.Zoom,
-            BorderStyle = BorderStyle.FixedSingle,
-            BackColor = Color.White
-        };
-        var img = Brand.ResImage("스크린샷_기본앱등록.png") ?? Brand.ResImage("assoc_guide.png");
-        if (img != null) pic.Image = img;
-
-        var centerPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(20, 10, 20, 10) };
-        centerPanel.Controls.Add(pic);
-
-        var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 56, Padding = new Padding(20, 10, 20, 12), BackColor = Brand.Wash };
-        var btnOpen = new Button
-        {
-            Text = "기본 앱 설정 열기",
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowOnly,
-            Width = 180,
-            Height = 34,
-            Dock = DockStyle.Right,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Brand.Theme == AppTheme.Sogang ? Brand.Cardinal : Color.FromArgb(30, 30, 30),
-            ForeColor = Color.White,
-            Cursor = Cursors.Hand,
-            Font = Brand.Ui(9.5f, FontStyle.Bold)
-        };
-        btnOpen.FlatAppearance.BorderSize = 0;
-        btnOpen.Click += (_, _) =>
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo("ms-settings:defaultapps") { UseShellExecute = true });
-            }
-            catch
-            {
-                Process.Start(new ProcessStartInfo("control", "/name Microsoft.DefaultPrograms") { UseShellExecute = true });
-            }
-        };
-
-        var btnClose = new Button
-        {
-            Text = "닫기",
-            Width = 80,
-            Height = 34,
-            Dock = DockStyle.Right,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(230, 230, 230),
-            ForeColor = Color.FromArgb(40, 40, 40),
-            Cursor = Cursors.Hand,
-            Font = Brand.Ui(9f)
-        };
-        btnClose.FlatAppearance.BorderSize = 0;
-        btnClose.Click += (_, _) => Close();
-
-        var btnSpace = new Panel { Dock = DockStyle.Right, Width = 10 };
-
-        bottomPanel.Controls.Add(btnOpen);
-        bottomPanel.Controls.Add(btnSpace);
-        bottomPanel.Controls.Add(btnClose);
-
-        Controls.Add(centerPanel);
-        Controls.Add(topPanel);
-        Controls.Add(bottomPanel);
-        AcceptButton = btnOpen;
-        CancelButton = btnClose;
     }
 }
 
@@ -4010,9 +3861,6 @@ static class Native
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWndParent, EnumProc lpEnumFunc, IntPtr lParam);
     [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
     public static extern int AddFontResourceEx(string lpszFilename, uint fl, IntPtr pdv);
-    [DllImport("shell32.dll")] public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
-    public static void NotifyAssocChanged() => SHChangeNotify(0x08000000, 0x0000, IntPtr.Zero, IntPtr.Zero);
-
     public static void AcceptTree(IntPtr hwnd)
     {
         DragAcceptFiles(hwnd, true);
