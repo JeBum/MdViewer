@@ -31,6 +31,7 @@
     <EmbeddedResource Include="assets\albatross.png" />
     <EmbeddedResource Include="assets\campus.png" />
     <EmbeddedResource Include="assets\campus_light.png" />
+    <EmbeddedResource Include="assets\assoc_guide.png" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Markdig" Version="0.41.3" />

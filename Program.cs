@@ -1,4 +1,5 @@
-﻿// ==============================================================================================
+// 의무사항: 소스 변경 시 요구사항을 소스 주석에 기록하고, 테스트 케이스를 추가하며, 작업 완료 후 release.bat을 실행한다.
+// ==============================================================================================
 // [MDviewer 개발 및 유지보수 필수 작업 규칙 (Development Workflow Rules)]
 // 1. 사용자 요구사항(기능 추가/수정) 발생 시 소스 코드(Program.cs 등)에 요건 및 주석 명확히 반영
 // 2. 테스트 케이스는 verification/TEST-CASES.md 및 verification/Checks.cs.txt에 기록. test-sample.md는 사용자의 MD 형식 샘플이므로 수정하지 않음
@@ -25,6 +26,7 @@ namespace MDviewer;
 
 enum SplitMode { None, Vertical, Horizontal }
 enum AppTheme { Sogang, Albatross, BlueSky, ForestGreen }
+enum ColumnMode { Single = 1, Two = 2, Three = 3, Auto = 0 }
 
 static class Program
 {
@@ -157,6 +159,7 @@ sealed class MainForm : Form, IMessageFilter
     readonly Label _intro = new();
     readonly Label _sampleLink = new();
     readonly Label _githubLink = new();
+    readonly Label _associationLink = new();
     readonly Label _help = new();
     readonly Label _helpTitle = new();
     readonly Label _helpMouse = new();
@@ -176,6 +179,10 @@ sealed class MainForm : Form, IMessageFilter
     ToolStripMenuItem? _miAlba;
     ToolStripMenuItem? _miBlueSky;
     ToolStripMenuItem? _miForestGreen;
+    ToolStripMenuItem? _miCol1;
+    ToolStripMenuItem? _miCol2;
+    ToolStripMenuItem? _miCol3;
+    ToolStripMenuItem? _miColAuto;
     bool _menuBusy;
     readonly TabControl _tabs = new()
     {
@@ -294,7 +301,7 @@ sealed class MainForm : Form, IMessageFilter
         using (var bg = new SolidBrush(on ? Brand.Paper : Brand.Wash))
             g.FillRectangle(bg, r);
         // 탭 아래 공통 테마선과 겹치지 않도록 선택 탭은 글꼴과 색상으로 구분한다.
-        var font = Brand.Ui(8f, on ? FontStyle.Bold : FontStyle.Regular);
+        var font = Brand.Ui(9f, on ? FontStyle.Bold : FontStyle.Regular);
         TextRenderer.DrawText(
             g, page.Text, font,
             new Rectangle(r.X + 6, r.Y, r.Width - 12, r.Height - 2),
@@ -460,6 +467,13 @@ sealed class MainForm : Form, IMessageFilter
         _githubLink.UseCompatibleTextRendering = true;
         _githubLink.Tag = "https://github.com/JeBum/MdViewer";
         _githubLink.Click += (_, _) => FileTab.OpenExternalUrl(_githubLink.Tag as string);
+        _associationLink.Text = "md 파일 연결프로그램 등록";
+        _associationLink.AutoSize = true;
+        _associationLink.Cursor = Cursors.Hand;
+        _associationLink.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+        _associationLink.BackColor = Color.Transparent;
+        _associationLink.UseCompatibleTextRendering = true;
+        _associationLink.Click += (_, _) => RegisterMdAssociation();
         _helpTitle.Text = "단축키";
         _helpTitle.AutoSize = true;
         _helpTitle.BackColor = Color.Transparent;
@@ -507,6 +521,7 @@ sealed class MainForm : Form, IMessageFilter
         _home.Controls.Add(_intro);
         _home.Controls.Add(_sampleLink);
         _home.Controls.Add(_githubLink);
+        _home.Controls.Add(_associationLink);
         _home.Controls.Add(_helpTitle);
         _home.Controls.Add(_help);
         _home.Controls.Add(_helpMouseTitle);
@@ -528,6 +543,7 @@ sealed class MainForm : Form, IMessageFilter
         _intro.UseCompatibleTextRendering = true;
         _sampleLink.UseCompatibleTextRendering = true;
         _githubLink.UseCompatibleTextRendering = true;
+        _associationLink.UseCompatibleTextRendering = true;
         _helpTitle.UseCompatibleTextRendering = true;
         _help.UseCompatibleTextRendering = true;
         _helpMouseTitle.UseCompatibleTextRendering = true;
@@ -538,6 +554,7 @@ sealed class MainForm : Form, IMessageFilter
         _intro.Font = F(10f);
         _sampleLink.Font = F(10f, FontStyle.Underline);
         _githubLink.Font = F(10f, FontStyle.Underline);
+        _associationLink.Font = F(10f, FontStyle.Underline);
         _helpTitle.Font = F(10f, FontStyle.Bold);
         _help.Font = F(8f);
         _helpMouseTitle.Font = F(10f, FontStyle.Bold);
@@ -545,6 +562,7 @@ sealed class MainForm : Form, IMessageFilter
         _intro.ForeColor = Brand.Ink;
         _sampleLink.ForeColor = Brand.Cardinal;
         _githubLink.ForeColor = Brand.Cardinal;
+        _associationLink.ForeColor = Brand.Cardinal;
         _helpTitle.ForeColor = Brand.Ink;
         _help.ForeColor = Brand.Ink;
         _helpMouseTitle.ForeColor = Brand.Ink;
@@ -568,6 +586,7 @@ sealed class MainForm : Form, IMessageFilter
         _logoFooter.Location = new Point(w - _logoFooter.Width - 24, h - _logoFooter.Height - 20);
         _sampleLink.Location = new Point(_intro.Left, _intro.Bottom + _intro.Font.Height);
         _githubLink.Location = new Point(_sampleLink.Left, _sampleLink.Bottom + 10);
+        _associationLink.Location = new Point(_sampleLink.Left, _githubLink.Bottom + 10);
         int blockH = _helpTitle.Height + 2 + Math.Max(_help.Height, _helpMouse.Height);
         int helpY = Math.Max(80, h - blockH - 8);
         _helpTitle.Location = new Point(28, helpY);
@@ -579,6 +598,7 @@ sealed class MainForm : Form, IMessageFilter
         _intro.BringToFront();
         _sampleLink.BringToFront();
         _githubLink.BringToFront();
+        _associationLink.BringToFront();
         _helpTitle.BringToFront();
         _help.BringToFront();
         _helpMouseTitle.BringToFront();
@@ -619,6 +639,51 @@ sealed class MainForm : Form, IMessageFilter
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    void RegisterMdAssociation()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath ?? Application.ExecutablePath;
+            if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe))
+                throw new InvalidOperationException("실행 파일 경로를 찾지 못했습니다.\npublish\\MDviewer.exe로 실행하세요.");
+            exe = System.IO.Path.GetFullPath(exe);
+            const string progId = "MDviewer.markdown";
+            string cmd = "\"" + exe + "\" \"%1\"";
+            string icon = "\"" + exe + "\",0";
+
+            void Put(string path, string name, object value)
+            {
+                using var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(path);
+                k.SetValue(name, value);
+            }
+
+            Put(@"Software\Classes\.md", "", progId);
+            Put(@"Software\Classes\.md\OpenWithProgids", progId, "");
+            Put(@"Software\Classes\.markdown", "", progId);
+            Put(@"Software\Classes\.markdown\OpenWithProgids", progId, "");
+            Put(@"Software\Classes\" + progId, "", "Markdown Document");
+            Put(@"Software\Classes\" + progId + @"\DefaultIcon", "", icon);
+            Put(@"Software\Classes\" + progId + @"\shell", "", "open");
+            Put(@"Software\Classes\" + progId + @"\shell\open", "", "MDviewer로 열기");
+            Put(@"Software\Classes\" + progId + @"\shell\open\command", "", cmd);
+            Put(@"Software\Classes\Applications\MDviewer.exe\shell\open\command", "", cmd);
+            Put(@"Software\MDviewer\Capabilities", "ApplicationName", "MDviewer");
+            Put(@"Software\MDviewer\Capabilities", "ApplicationDescription", "Markdown viewer");
+            Put(@"Software\MDviewer\Capabilities\FileAssociations", ".md", progId);
+            Put(@"Software\MDviewer\Capabilities\FileAssociations", ".markdown", progId);
+            Put(@"Software\RegisteredApplications", "MDviewer", @"Software\MDviewer\Capabilities");
+            Put(@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithProgids", progId, "");
+            Put(@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.markdown\OpenWithProgids", progId, "");
+
+            Native.NotifyAssocChanged();
+            using var dlg = new AssocGuideDialog();
+            dlg.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "연결 등록 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
     void BuildMenu()
     {
         _menu.Renderer = new SogangMenuRenderer();
@@ -712,7 +777,37 @@ sealed class MainForm : Form, IMessageFilter
         var themeMenu = new ToolStripMenuItem("테마");
         themeMenu.DropDownItems.AddRange(new ToolStripItem[] { _miSogang, _miAlba, _miBlueSky, _miForestGreen });
         _menu.Items.Add(themeMenu);
+
+        _miCol1 = new ToolStripMenuItem("1단 (기본)") { CheckOnClick = true };
+        _miCol2 = new ToolStripMenuItem("2단") { CheckOnClick = true };
+        _miCol3 = new ToolStripMenuItem("3단") { CheckOnClick = true };
+        _miColAuto = new ToolStripMenuItem("자동 (너비 맞춤)") { CheckOnClick = true };
+        _miCol1.CheckedChanged += (_, _) =>
+        {
+            if (_menuBusy) return;
+            SetColumnMode(ColumnMode.Single);
+        };
+        _miCol2.CheckedChanged += (_, _) =>
+        {
+            if (_menuBusy) return;
+            SetColumnMode(ColumnMode.Two);
+        };
+        _miCol3.CheckedChanged += (_, _) =>
+        {
+            if (_menuBusy) return;
+            SetColumnMode(ColumnMode.Three);
+        };
+        _miColAuto.CheckedChanged += (_, _) =>
+        {
+            if (_menuBusy) return;
+            SetColumnMode(ColumnMode.Auto);
+        };
+        var columnMenu = new ToolStripMenuItem("다단 보기");
+        columnMenu.DropDownItems.AddRange(new ToolStripItem[] { _miCol1, _miCol2, _miCol3, _miColAuto });
+        _menu.Items.Add(columnMenu);
+
         SyncThemeMenu();
+        SyncColumnMenu();
         ApplyMenuFont();
         SizeMenu();
         _menu.Opening += (_, _) =>
@@ -742,6 +837,7 @@ sealed class MainForm : Form, IMessageFilter
                 if (_miHorz != null) _miHorz.Checked = Current!.Split == SplitMode.Horizontal;
             }
             SyncThemeMenu();
+            SyncColumnMenu();
             _menuBusy = false;
         };
     }
@@ -814,6 +910,33 @@ sealed class MainForm : Form, IMessageFilter
             if (_miForestGreen != null) _miForestGreen.Checked = Brand.Theme == AppTheme.ForestGreen;
         }
         finally { _menuBusy = busy; }
+    }
+
+    void SyncColumnMenu()
+    {
+        if (_miCol1 == null || _miCol2 == null || _miCol3 == null || _miColAuto == null) return;
+        var busy = _menuBusy;
+        _menuBusy = true;
+        try
+        {
+            _miCol1.Checked = Brand.ColumnViewMode == ColumnMode.Single;
+            _miCol2.Checked = Brand.ColumnViewMode == ColumnMode.Two;
+            _miCol3.Checked = Brand.ColumnViewMode == ColumnMode.Three;
+            _miColAuto.Checked = Brand.ColumnViewMode == ColumnMode.Auto;
+        }
+        finally { _menuBusy = busy; }
+    }
+
+    void SetColumnMode(ColumnMode mode)
+    {
+        if (Brand.ColumnViewMode != mode)
+        {
+            Brand.ColumnViewMode = mode;
+            Brand.SaveColumnMode();
+            foreach (var tab in GetAllTabs())
+                tab.ApplyColumnMode();
+        }
+        SyncColumnMenu();
     }
 
     void ApplyTheme()
@@ -1073,6 +1196,90 @@ sealed class MainForm : Form, IMessageFilter
     }
 }
 
+sealed class AssocGuideDialog : Form
+{
+    public AssocGuideDialog()
+    {
+        Text = "MDviewer - .md 연결 프로그램 등록 안내";
+        Width = 590;
+        Height = 440;
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        BackColor = Brand.Paper;
+        Font = Brand.Ui(9f);
+
+        var topPanel = new Panel { Dock = DockStyle.Top, Height = 95, Padding = new Padding(20, 16, 20, 8), BackColor = Brand.Wash };
+        var lblTitle = new Label
+        {
+            Text = "MDviewer를 .md 연결 프로그램으로 등록했습니다.",
+            Dock = DockStyle.Top,
+            Height = 26,
+            Font = Brand.Ui(11f, FontStyle.Bold),
+            ForeColor = Brand.Theme == AppTheme.Sogang ? Brand.Cardinal : Color.FromArgb(20, 20, 20)
+        };
+        var lblDesc = new Label
+        {
+            Text = "Windows 11은 기본 앱 설정을 사용자가 한 번 직접 지정해야 합니다.\n아래 가이드 화면처럼 기본 앱 설정에서 .md 검색 후 MDviewer를 선택하세요.",
+            Dock = DockStyle.Fill,
+            Font = Brand.Ui(9f),
+            ForeColor = Brand.Ink
+        };
+        topPanel.Controls.Add(lblDesc);
+        topPanel.Controls.Add(lblTitle);
+
+        var pic = new PictureBox
+        {
+            Dock = DockStyle.Fill,
+            SizeMode = PictureBoxSizeMode.Zoom,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.White,
+            Image = Brand.ResImage("assoc_guide.png")
+        };
+        var centerPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(20, 10, 20, 10) };
+        centerPanel.Controls.Add(pic);
+
+        var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 56, Padding = new Padding(20, 10, 20, 12), BackColor = Brand.Wash };
+        var btnOpen = new Button
+        {
+            Text = "기본 앱 설정 열기",
+            AutoSize = true,
+            Width = 180,
+            Height = 34,
+            Dock = DockStyle.Right,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Brand.Cardinal,
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand,
+            Font = Brand.Ui(9.5f, FontStyle.Bold)
+        };
+        btnOpen.FlatAppearance.BorderSize = 0;
+        btnOpen.Click += (_, _) =>
+        {
+            try { Process.Start(new ProcessStartInfo("ms-settings:defaultapps") { UseShellExecute = true }); }
+            catch { Process.Start(new ProcessStartInfo("control", "/name Microsoft.DefaultPrograms") { UseShellExecute = true }); }
+        };
+
+        var btnClose = new Button
+        {
+            Text = "닫기", Width = 80, Height = 34, Dock = DockStyle.Right,
+            FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(230, 230, 230),
+            ForeColor = Color.FromArgb(40, 40, 40), Cursor = Cursors.Hand, Font = Brand.Ui(9f)
+        };
+        btnClose.FlatAppearance.BorderSize = 0;
+        btnClose.Click += (_, _) => Close();
+        bottomPanel.Controls.Add(btnOpen);
+        bottomPanel.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 10 });
+        bottomPanel.Controls.Add(btnClose);
+        Controls.Add(centerPanel);
+        Controls.Add(topPanel);
+        Controls.Add(bottomPanel);
+        AcceptButton = btnOpen;
+        CancelButton = btnClose;
+    }
+}
 sealed class FileTab : Panel
 {
     public static string LastFindQuery = "";
@@ -1557,8 +1764,23 @@ sealed class FileTab : Panel
         Native.ApplyLineSpacing(_text, 1.4f);
         ApplyWebZoom(_web, _zoomWeb);
         ApplyWebZoom(_web2, _zoomWeb2);
+        ApplyColumnMode();
         RefreshPreview(forceReload: true);
         _gutter.Invalidate();
+    }
+
+    public void ApplyColumnMode()
+    {
+        if (_ready && _web.CoreWebView2 != null)
+        {
+            var js = $"if(typeof setColumnMode==='function')setColumnMode({(int)Brand.ColumnViewMode});";
+            _ = _web.CoreWebView2.ExecuteScriptAsync(js);
+        }
+        if (_ready && _splitMode != SplitMode.None && _web2.CoreWebView2 != null)
+        {
+            var js = $"if(typeof setColumnMode==='function')setColumnMode({(int)Brand.ColumnViewMode});";
+            _ = _web2.CoreWebView2.ExecuteScriptAsync(js);
+        }
     }
 
     void OnEditorDrag(object? sender, DragEventArgs e)
@@ -2965,7 +3187,7 @@ sealed class FileTab : Panel
 
         html = Regex.Replace(
             html,
-            @"<pre(?<preattr>[^>]*)><code(?<attr>(?:(?!class=""language-)[^>])*)>(?<content>[\s\S]*?)</code></pre>",
+            @"<pre(?<preattr>[^>]*)><code(?<attr>(?:(?!class=""language-|class='language-)[^>])*)>(?<content>[\s\S]*?)</code></pre>",
             match =>
             {
                 var attr = match.Groups["attr"].Value;
@@ -3022,7 +3244,11 @@ sealed class FileTab : Panel
         if (string.IsNullOrEmpty(htmlCode))
             return "<span class='code-line'><span class='line-num'> 1</span><span class='line-content'></span></span>";
 
-        var lines = htmlCode.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var normalized = htmlCode.Replace("\r\n", "\n").Replace('\r', '\n');
+        // Markdig may retain the fence's first line break; do not render it as a duplicate line 1.
+        if (normalized.StartsWith("\n", StringComparison.Ordinal))
+            normalized = normalized[1..];
+        var lines = normalized.Split('\n');
         if (lines.Length > 1 && string.IsNullOrEmpty(lines[^1]))
         {
             Array.Resize(ref lines, lines.Length - 1);
@@ -3169,8 +3395,16 @@ sealed class FileTab : Panel
         return sb.ToString();
     }
 
-    static string WrapHtml(string body) =>
-        "<!doctype html><html><head><meta charset='utf-8'/>" +
+    static string WrapHtml(string body)
+    {
+        string colClass = Brand.ColumnViewMode switch
+        {
+            ColumnMode.Two => "multi-col col-2",
+            ColumnMode.Three => "multi-col col-3",
+            ColumnMode.Auto => "multi-col col-auto",
+            _ => "col-1"
+        };
+        return "<!doctype html><html><head><meta charset='utf-8'/>" +
         "<meta name='viewport' content='width=device-width, initial-scale=1'/>" +
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css'/>" +
         "<script src='https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js'></script>" +
@@ -3213,8 +3447,23 @@ sealed class FileTab : Panel
          ".json-error-badge{background:#e06c75;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold;margin-left:8px;margin-right:auto;}" +
          ".json-error-msg{padding:8px 14px;background:rgba(224,108,117,0.15);border-bottom:1px solid rgba(224,108,117,0.3);color:#ff7b86;font-size:12px;font-family:Consolas,'Cascadia Code',monospace;}" +
          ".json-invalid{opacity:0.9;}" +
-         "</style></head><body><article class='md'>" +
+         "html:has(meta[name='word-export']) body.multi-col{overflow-x:hidden !important;overflow-y:auto !important;height:auto !important;width:100% !important;}" +
+         "html:has(meta[name='word-export']) body.multi-col .md{max-width:46rem !important;width:100% !important;height:auto !important;margin:0 auto !important;column-count:1 !important;column-width:auto !important;overflow:visible !important;}" +
+         "body.multi-col:not(.md-edit-position){margin:0 !important;padding:0 !important;width:100vw !important;height:100vh !important;overflow:hidden !important;}" +
+         "body.multi-col:not(.md-edit-position) .md{max-width:none !important;width:calc(100vw - 64px) !important;height:calc(100vh - 48px) !important;margin:24px 32px !important;padding:0 !important;box-sizing:border-box !important;overflow-x:auto !important;overflow-y:hidden !important;column-fill:auto !important;column-gap:36px !important;column-rule:1px solid rgba(128,128,128,0.22) !important;}" +
+         "body.col-2:not(.md-edit-position) .md{column-count:2 !important;}" +
+         "body.col-3:not(.md-edit-position) .md{column-count:3 !important;}" +
+         "body.col-auto:not(.md-edit-position) .md{column-width:400px !important;}" +
+         "body.multi-col:not(.md-edit-position) pre,body.multi-col:not(.md-edit-position) table,body.multi-col:not(.md-edit-position) figure,body.multi-col:not(.md-edit-position) img,body.multi-col:not(.md-edit-position) blockquote,body.multi-col:not(.md-edit-position) .code-block-wrapper,body.multi-col:not(.md-edit-position) .markdown-alert,body.multi-col:not(.md-edit-position) .katex-display{break-inside:avoid !important;page-break-inside:avoid !important;}" +
+         "body.multi-col:not(.md-edit-position) img{max-height:calc(100vh - 120px) !important;max-width:100% !important;object-fit:contain !important;}" +
+         "body.multi-col:not(.md-edit-position) h1,body.multi-col:not(.md-edit-position) h2,body.multi-col:not(.md-edit-position) h3{break-after:avoid !important;}" +
+         "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar{height:8px !important;}" +
+         "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-track{background:transparent !important;}" +
+         "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.35) !important;border-radius:4px !important;}" +
+         "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,0.6) !important;}" +
+         $"</style></head><body class='{colClass}'><article class='md'>" +
         body + "</article>" + ScrollScript + "</body></html>";
+    }
 
     const string ScrollScript =
         "<script>let __lastKeywords=[];let __cursorTarget=null;" +
@@ -3516,6 +3765,91 @@ sealed class FileTab : Panel
         "window.addEventListener('load',renderMath);" +
         "setTimeout(renderMath,50);" +
         "setTimeout(renderMath,250);" +
+        "function setColumnMode(mode){" +
+        "const wasMulti=document.body.classList.contains('multi-col');" +
+        "document.body.classList.remove('multi-col','col-1','col-2','col-3','col-auto');" +
+        "const isMulti=mode===2||mode===3||mode===0;" +
+        "if(mode===2){document.body.classList.add('multi-col','col-2');}" +
+        "else if(mode===3){document.body.classList.add('multi-col','col-3');}" +
+        "else if(mode===0){document.body.classList.add('multi-col','col-auto');}" +
+        "else{document.body.classList.add('col-1');}" +
+        "window.__targetColumnIndex=undefined;" +
+        "const md=document.querySelector('.md');" +
+        "if(isMulti&&!wasMulti){if(md)md.scrollLeft=0;}" +
+        "else if(!isMulti&&wasMulti){window.scrollTo({top:0,left:0});}" +
+        "}" +
+        "function isMultiCol(){return document.body.classList.contains('multi-col')&&!document.body.classList.contains('md-edit-position');}" +
+        "function getColStep(){" +
+        "const md=document.querySelector('.md');" +
+        "if(!md)return 400;" +
+        "const gap=36;const clientW=md.clientWidth;" +
+        "let count=2;" +
+        "if(document.body.classList.contains('col-3'))count=3;" +
+        "else if(document.body.classList.contains('col-auto')){const colW=400;count=Math.max(1,Math.floor((clientW+gap)/(colW+gap)));}" +
+        "return (clientW+gap)/count;" +
+        "}" +
+        "window.addEventListener('wheel',(e)=>{" +
+        "if(!isMultiCol())return;" +
+        "if(e.ctrlKey||e.shiftKey||e.altKey)return;" +
+        "const md=document.querySelector('.md');" +
+        "if(!md)return;" +
+        "let target=e.target;" +
+        "while(target&&target!==md&&target!==document.body){" +
+        "if(target.classList&&(target.classList.contains('json-view')||target.tagName==='PRE')){" +
+        "if(target.scrollHeight>target.clientHeight||target.scrollWidth>target.clientWidth)return;" +
+        "}" +
+        "target=target.parentElement;" +
+        "}" +
+        "const dir=e.deltaY>0?1:(e.deltaY<0?-1:0);" +
+        "if(dir===0)return;" +
+        "e.preventDefault();" +
+        "const step=getColStep();" +
+        "if(typeof window.__targetColumnIndex!=='number'||Math.abs(md.scrollLeft-window.__targetColumnIndex*step)>step*1.5){" +
+        "window.__targetColumnIndex=Math.round(md.scrollLeft/step);" +
+        "}" +
+        "window.__targetColumnIndex=Math.max(0,window.__targetColumnIndex+dir);" +
+        "const maxScroll=Math.max(0,md.scrollWidth-md.clientWidth);" +
+        "const targetLeft=Math.min(maxScroll,window.__targetColumnIndex*step);" +
+        "md.scrollTo({left:targetLeft,behavior:'smooth'});" +
+        "},{passive:false});" +
+        "window.addEventListener('keydown',(e)=>{" +
+        "if(!isMultiCol())return;" +
+        "if(e.ctrlKey||e.altKey)return;" +
+        "const md=document.querySelector('.md');" +
+        "if(!md)return;" +
+        "const step=getColStep();let count=2;" +
+        "if(document.body.classList.contains('col-3'))count=3;" +
+        "else if(document.body.classList.contains('col-auto')){count=Math.max(1,Math.round((md.clientWidth+36)/step));}" +
+        "if(e.key==='ArrowRight'||e.key==='Right'){" +
+        "e.preventDefault();" +
+        "window.__targetColumnIndex=Math.max(0,(window.__targetColumnIndex??Math.round(md.scrollLeft/step))+1);" +
+        "const maxScroll=Math.max(0,md.scrollWidth-md.clientWidth);" +
+        "md.scrollTo({left:Math.min(maxScroll,window.__targetColumnIndex*step),behavior:'smooth'});" +
+        "}else if(e.key==='ArrowLeft'||e.key==='Left'){" +
+        "e.preventDefault();" +
+        "window.__targetColumnIndex=Math.max(0,(window.__targetColumnIndex??Math.round(md.scrollLeft/step))-1);" +
+        "md.scrollTo({left:window.__targetColumnIndex*step,behavior:'smooth'});" +
+        "}else if(e.key==='PageDown'){" +
+        "e.preventDefault();" +
+        "window.__targetColumnIndex=Math.max(0,(window.__targetColumnIndex??Math.round(md.scrollLeft/step))+count);" +
+        "const maxScroll=Math.max(0,md.scrollWidth-md.clientWidth);" +
+        "md.scrollTo({left:Math.min(maxScroll,window.__targetColumnIndex*step),behavior:'smooth'});" +
+        "}else if(e.key==='PageUp'){" +
+        "e.preventDefault();" +
+        "window.__targetColumnIndex=Math.max(0,(window.__targetColumnIndex??Math.round(md.scrollLeft/step))-count);" +
+        "md.scrollTo({left:window.__targetColumnIndex*step,behavior:'smooth'});" +
+        "}else if(e.key==='Home'){" +
+        "e.preventDefault();window.__targetColumnIndex=0;md.scrollTo({left:0,behavior:'smooth'});" +
+        "}else if(e.key==='End'){" +
+        "e.preventDefault();const maxScroll=Math.max(0,md.scrollWidth-md.clientWidth);" +
+        "window.__targetColumnIndex=Math.ceil(maxScroll/step);" +
+        "md.scrollTo({left:maxScroll,behavior:'smooth'});" +
+        "}" +
+        "});" +
+        "window.addEventListener('resize',()=>{" +
+        "if(!isMultiCol())return;" +
+        "window.__targetColumnIndex=undefined;" +
+        "});" +
         "</script>";
 
 }
@@ -3573,57 +3907,66 @@ static class Brand
     public static Color Cardinal => Theme switch
     {
         AppTheme.Sogang => Color.FromArgb(0xB3, 0x29, 0x2E),
-        AppTheme.BlueSky => Color.FromArgb(0x02, 0x84, 0xC7),
+        AppTheme.BlueSky => Color.FromArgb(0x6D, 0xA7, 0xF2),
         AppTheme.ForestGreen => Color.FromArgb(0x2F, 0x6B, 0x4F),
+        AppTheme.Albatross => Color.FromArgb(0x43, 0x46, 0x4B),
         _ => Color.FromArgb(30, 30, 30)
     };
     public static Color Wine => Theme switch
     {
         AppTheme.Sogang => Color.FromArgb(0x9E, 0x2A, 0x2F),
-        AppTheme.BlueSky => Color.FromArgb(0x03, 0x69, 0xA1),
+        AppTheme.BlueSky => Color.FromArgb(0x03, 0x5A, 0xA6),
         AppTheme.ForestGreen => Color.FromArgb(0x2F, 0x6B, 0x4F),
+        AppTheme.Albatross => Color.FromArgb(0x0F, 0x10, 0x12),
         _ => Color.FromArgb(20, 20, 20)
     };
     public static Color Gray5 => Theme switch
     {
         AppTheme.Sogang => Color.FromArgb(0xB1, 0xB3, 0xB6),
-        AppTheme.BlueSky => Color.FromArgb(0xBA, 0xE6, 0xFD),
+        AppTheme.BlueSky => Color.FromArgb(0xA0, 0xC4, 0xF2),
         AppTheme.ForestGreen => Color.FromArgb(0xBD, 0xD5, 0xC5),
+        AppTheme.Albatross => Color.FromArgb(0xB0, 0xB3, 0xB8),
         _ => Color.FromArgb(180, 180, 180)
     };
     public static Color Wash => Theme switch
     {
-        AppTheme.BlueSky or AppTheme.ForestGreen => Color.White,
+        AppTheme.BlueSky => Color.White,
+        AppTheme.ForestGreen => Color.White,
+        AppTheme.Albatross => Color.FromArgb(0xFA, 0xFA, 0xF8),
         _ => Color.FromArgb(0xFA, 0xFA, 0xFA)
     };
-    public static Color FrameAccent => Theme == AppTheme.Albatross ? Color.FromArgb(12, 12, 12) : Cardinal;
+    public static Color FrameAccent => Theme == AppTheme.Albatross ? Color.FromArgb(0x0F, 0x10, 0x12) : Cardinal;
     public static Color Paper => Color.White;
     public static Color Ink => Theme switch
     {
-        AppTheme.BlueSky => Color.FromArgb(0x0F, 0x17, 0x2A),
+        AppTheme.BlueSky => Color.FromArgb(0x02, 0x33, 0x73),
+        AppTheme.Albatross => Color.FromArgb(0x0F, 0x10, 0x12),
         AppTheme.ForestGreen => Color.FromArgb(0x25, 0x33, 0x2B),
         _ => Color.FromArgb(0x2A, 0x2A, 0x2A)
     };
     public static Color Mute => Theme switch
     {
         AppTheme.Sogang => Color.FromArgb(0x6A, 0x6C, 0x6E),
-        AppTheme.BlueSky => Color.FromArgb(0x64, 0x74, 0x8B),
+        AppTheme.BlueSky => Color.FromArgb(0x03, 0x5A, 0xA6),
+        AppTheme.Albatross => Color.FromArgb(0x43, 0x46, 0x4B),
         AppTheme.ForestGreen => Color.FromArgb(0x5C, 0x73, 0x65),
         _ => Color.FromArgb(90, 90, 90)
     };
     public static string CheckboxAccentHex => Theme switch
     {
         AppTheme.Sogang => "#b3292e",
-        AppTheme.BlueSky => "#0284c7",
+        AppTheme.BlueSky => "#6da7f2",
         AppTheme.ForestGreen => "#2f6b4f",
+        AppTheme.Albatross => "#43464b",
         _ => "#222222"
     };
 
     public static string CursorActiveAccentHex => Theme switch
     {
         AppTheme.Sogang => "#b3292e",
-        AppTheme.BlueSky => "#0284c7",
+        AppTheme.BlueSky => "#6da7f2",
         AppTheme.ForestGreen => "#2f6b4f",
+        AppTheme.Albatross => "#43464b",
         _ => "#333333"
     };
 
@@ -3648,20 +3991,20 @@ static class Brand
             ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}",
 
         AppTheme.BlueSky =>
-            "html,body{margin:0;background:#ffffff;color:#0f172a;width:100%}" +
+            "html,body{margin:0;background:#ffffff;color:#023373;width:100%}" +
             "body{font:15.5px/1.6 'SogangUni','Malgun Gothic',sans-serif;overflow-x:hidden}" +
             ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box}" +
-            "h1,h2,h3{line-height:1.25;color:#0369a1} h1{font-size:1.85rem} h2{font-size:1.3rem;border-bottom:1px solid #bae6fd;padding-bottom:.2em}" +
+            "h1,h2,h3{line-height:1.25;color:#035aa6} h1{font-size:1.85rem} h2{font-size:1.3rem;border-bottom:1px solid #a0c4f2;padding-bottom:.2em}" +
             "p{margin:0.8em 0;line-height:1.6}" +
             "ul,ol{margin:0.6em 0;padding-left:1.5em;line-height:1.6}" +
             "li{margin:0.25em 0}" +
-            "a{color:#0284c7;text-decoration:none} a:hover{text-decoration:underline}" +
-            "code{font-family:Consolas,monospace;font-size:.88em;background:#e0f2fe;color:#0369a1;padding:.1em .35em;border-radius:6px}" +
-            "pre{background:#0f172a;color:#f8fafc;border-radius:12px;padding:10px 14px;white-space:pre-wrap;word-break:break-word}" +
+            "a{color:#035aa6;text-decoration:none} a:hover{text-decoration:underline}" +
+            "code{font-family:Consolas,monospace;font-size:.88em;background:#cedef2;color:#035aa6;padding:.1em .35em;border-radius:6px}" +
+            "pre{background:#023373;color:#f8fafc;border-radius:12px;padding:10px 14px;white-space:pre-wrap;word-break:break-word}" +
             "pre code{background:none;padding:0;color:inherit}" +
-            "blockquote{margin:0.8em 0;padding:.2em 0 .2em 1em;border-left:3px solid #0284c7;color:#475569;background:#e0f2fe;border-radius:0 6px 6px 0;}" +
-            "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#fff}" +
-            "th,td{border:1px solid #bae6fd;padding:.4em .6em} th{background:#e0f2fe;color:#0369a1;text-align:left}" +
+            "blockquote{margin:0.8em 0;padding:.2em 0 .2em 1em;border-left:3px solid #6da7f2;color:#035aa6;background:#cedef2;border-radius:0 6px 6px 0;}" +
+            "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#ffffff}" +
+            "th,td{border:1px solid #a0c4f2;padding:.4em .6em} th{background:#cedef2;color:#035aa6;text-align:left}" +
             "img{max-width:100%}" +
             ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}",
 
@@ -3684,6 +4027,23 @@ static class Brand
             "img{max-width:100%}" +
             ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}",
 
+        AppTheme.Albatross =>
+            "html,body{margin:0;background:#fafaf8;color:#0f1012;width:100%}" +
+            "body{font:15.5px/1.6 'Segoe UI','Malgun Gothic',sans-serif;overflow-x:hidden}" +
+            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box}" +
+            "h1,h2,h3{line-height:1.25;color:#43464b} h1{font-size:1.85rem} h2{font-size:1.3rem;border-bottom:1px solid #b0b3b8;padding-bottom:.2em}" +
+            "p{margin:0.8em 0;line-height:1.6}" +
+            "ul,ol{margin:0.6em 0;padding-left:1.5em;line-height:1.6}" +
+            "li{margin:0.25em 0}" +
+            "a{color:#43464b} code{font-family:Consolas,monospace;font-size:.88em;background:#dadada;color:#43464b;padding:.1em .35em;border-radius:6px}" +
+            "pre{background:#0f1012;color:#fafaf8;border-radius:12px;padding:10px 14px;white-space:pre-wrap;word-break:break-word}" +
+            "pre code{background:none;padding:0;color:inherit}" +
+            "blockquote{margin:0.8em 0;padding:.2em 0 .2em 1em;border-left:3px solid #43464b;color:#43464b;background:#dadada;border-radius:0 6px 6px 0;}" +
+            "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#fafaf8}" +
+            "th,td{border:1px solid #b0b3b8;padding:.4em .6em} th{background:#dadada;color:#43464b;text-align:left}" +
+            "img{max-width:100%}" +
+            ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}",
+
         _ =>
             "html,body{margin:0;background:#fafafa;color:#1a1a1a;width:100%}" +
             "body{font:15.5px/1.6 'Segoe UI','Malgun Gothic',sans-serif;overflow-x:hidden}" +
@@ -3699,8 +4059,7 @@ static class Brand
             "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#fff}" +
             "th,td{border:1px solid #ccc;padding:.4em .6em} th{background:#f0f0f0;color:#111;text-align:left}" +
             "img{max-width:100%}" +
-            ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}"
-    };
+            ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}"    };
 
     static string ThemePath =>
         System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MDviewer", "theme.txt");
@@ -3729,6 +4088,7 @@ static class Brand
         }
         catch { }
         LoadTheme();
+        LoadColumnMode();
     }
 
     public static void LoadTheme()
@@ -3759,6 +4119,38 @@ static class Brand
             var dir = System.IO.Path.GetDirectoryName(ThemePath)!;
             Directory.CreateDirectory(dir);
             File.WriteAllText(ThemePath, Theme.ToString());
+        }
+        catch { }
+    }
+
+    public static ColumnMode ColumnViewMode { get; set; } = ColumnMode.Single;
+    static string ColumnModePath =>
+        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MDviewer", "columns.txt");
+
+    public static void LoadColumnMode()
+    {
+        try
+        {
+            var p = ColumnModePath;
+            if (File.Exists(p))
+            {
+                var txt = File.ReadAllText(p).Trim();
+                if (int.TryParse(txt, out int val) && Enum.IsDefined(typeof(ColumnMode), val))
+                    ColumnViewMode = (ColumnMode)val;
+                else if (Enum.TryParse<ColumnMode>(txt, true, out var mode))
+                    ColumnViewMode = mode;
+            }
+        }
+        catch { }
+    }
+
+    public static void SaveColumnMode()
+    {
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(ColumnModePath)!;
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(ColumnModePath, ((int)ColumnViewMode).ToString());
         }
         catch { }
     }
@@ -3859,6 +4251,9 @@ static class Native
     [DllImport("shell32.dll")] public static extern void DragAcceptFiles(IntPtr hWnd, bool fAccept);
     [DllImport("shell32.dll")] public static extern void DragFinish(IntPtr hDrop);
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWndParent, EnumProc lpEnumFunc, IntPtr lParam);
+    [DllImport("shell32.dll")]
+    static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+    public static void NotifyAssocChanged() => SHChangeNotify(0x08000000, 0x0000, IntPtr.Zero, IntPtr.Zero);
     [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
     public static extern int AddFontResourceEx(string lpszFilename, uint fl, IntPtr pdv);
     public static void AcceptTree(IntPtr hwnd)

@@ -104,8 +104,11 @@ internal static class Checks
                 await RunSplit();
                 await RunWordView();
                 await RunForestTheme();
+                await RunColumnMode();
                 await RunThemeDirtyState();
                 await RunHomeSample();
+        await RunHomeAssociationLink();
+        await RunAssociationDialogColors();
                 await RunEditorIsolation();
             }
             catch (Exception e) { Record("ENV", "Integration environment", "BLOCKED", e.ToString()); }
@@ -136,6 +139,7 @@ internal static class Checks
         Test("JSON-04", "Minified JSON gets two-space indentation", () => { var h = (string)Call("RenderJsonHtml", "{\"a\":1}")!; Require(h.Contains("class='line-content'>  <span class='json-key'>"), h); });
         Test("JSON-05", "Markdown JSON blocks are formatted", () => Require(Render("```json\n{\"a\":1}\n```").Contains("Copy JSON"), "JSON block was not converted"));
         Test("CODE-01", "Code headers and line numbers", () => { var h = Render("```python\nfirst\nsecond\n```"); Require(h.Contains("copy-code-btn"), h); Equal(2, Regex.Matches(h, "class='line-num'").Count); });
+        Test("CODE-03", "Code blocks do not render a duplicate line 1 from the fence newline", () => { var h = Render("```bat\nbuild.bat\n```"); Equal(1, Regex.Matches(h, "class='line-num'").Count); Require(!h.Contains("class='line-content'></span>"), h); });
         Test("CODE-02", "HTML inside code stays text", () => { var h = Render("```\n<script>alert(1)</script>\n```"); Require(h.Contains("&lt;script&gt;") && !h.Contains("<script>"), h); });
         Test("CALLOUT-01", "Five documented GitHub callout types", () => { foreach (var k in new[] { "NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION" }) Require(Render($"> [!{k}] Title\n> Body").Contains("markdown-alert-" + k.ToLowerInvariant()), k); });
         Test("CALLOUT-02", "Callout containing list remains callout", () => Require(Render("> [!NOTE] Title\n>\n> - item").Contains("markdown-alert-note"), "Nested list prevents callout conversion"));
@@ -194,7 +198,7 @@ internal static class Checks
         await TestAsync("WEB-15", "Checkbox after normalized table updates correct source line", async () => { Text("intro\n|A|B|\n|-|-|\n|1|2|\n\n- [ ] todo"); await Page(Editor.Text); await JS("(document.querySelector('input[type=checkbox]').click(),true)"); await Wait(() => Task.FromResult(Editor.Text.Contains("[x]")), 3000); });
         await TestAsync("WEB-16", "Task completion applies strike-through", async () => { await Page("- [x] done"); var style = await JS("getComputedStyle(document.querySelector('.task-list-item')).textDecorationLine"); Require(style.ToString().Contains("line-through"), "Computed decoration: " + style); });
         await TestAsync("WEB-17", "Edit refresh retains active search highlights", async () => { await Page("cat cat"); await JS("findInPage('cat',false,0)"); await JS("(updatePreviewContent('<p>cat cat updated</p>',0,1),true)"); Equal(2, (await JS("document.querySelectorAll('.md-find-hl').length")).GetInt32()); });
-        await TestAsync("WEB-18", "Four theme checkbox accents", async () => { foreach (var (theme, color) in new[] { (AppTheme.Sogang, "rgb(179, 41, 46)"), (AppTheme.BlueSky, "rgb(2, 132, 199)"), (AppTheme.Albatross, "rgb(34, 34, 34)"), (AppTheme.ForestGreen, "rgb(47, 107, 79)") }) { Brand.Theme = theme; await Page("- [ ] task"); Equal(color, (await JS("getComputedStyle(document.querySelector('input')).accentColor")).GetString()); } });
+        await TestAsync("WEB-18", "Four theme checkbox accents", async () => { foreach (var (theme, color) in new[] { (AppTheme.Sogang, "rgb(179, 41, 46)"), (AppTheme.BlueSky, "rgb(109, 167, 242)"), (AppTheme.Albatross, "rgb(67, 70, 75)"), (AppTheme.ForestGreen, "rgb(47, 107, 79)") }) { Brand.Theme = theme; await Page("- [ ] task"); Equal(color, (await JS("getComputedStyle(document.querySelector('input')).accentColor")).GetString()); } });
         await TestAsync("WEB-19", "Standalone test sample renders all eleven sections", async () => { await Page(File.ReadAllText(Path.Combine(Root, "test-sample.md")), true); Equal(11, (await JS("document.querySelectorAll('h2').length")).GetInt32()); Require((await JS("document.querySelectorAll('.json-has-error').length")).GetInt32() == 1, "Expected one intentionally invalid JSON"); });
         await TestAsync("SPEC-05", "Mermaid produces a diagram in WebView2", async () => { await Page("```mermaid\ngraph LR; A-->B;\n```"); await Task.Delay(500); Equal(1, (await JS("document.querySelectorAll('svg').length")).GetInt32()); });
         await TestAsync("ZOOM-01", "Editor-only zoom leaves preview scale unchanged", async () => { SetField("_zoomAt", DateTime.MinValue); var before = Field<double>("_zoomWeb"); Tab.AdjustEditZoom(0.08); Equal(before, Field<double>("_zoomWeb")); Equal(1.08, Field<double>("_zoomEdit")); await Task.CompletedTask; });
@@ -281,7 +285,7 @@ internal static class Checks
         });
         await TestAsync("CURSOR-08", "Marker follows all four theme colors", async () =>
         {
-            foreach (var (theme, color) in new[] { (AppTheme.Sogang,"rgb(179, 41, 46)"), (AppTheme.BlueSky,"rgb(2, 132, 199)"), (AppTheme.Albatross,"rgb(51, 51, 51)"), (AppTheme.ForestGreen,"rgb(47, 107, 79)") })
+            foreach (var (theme, color) in new[] { (AppTheme.Sogang,"rgb(179, 41, 46)"), (AppTheme.BlueSky,"rgb(109, 167, 242)"), (AppTheme.Albatross,"rgb(67, 70, 75)"), (AppTheme.ForestGreen,"rgb(47, 107, 79)") })
             {
                 Brand.Theme = theme; await Page(doc); await JS("(scrollToCursorLine(5,7),true)");
                 Equal(color,(await JS("getComputedStyle(document.getElementById('md-cursor-indicator')).backgroundColor")).GetString());
@@ -294,7 +298,7 @@ internal static class Checks
             await JS("(clearCursorHighlight(),true)");
             Require((await JS("document.getElementById('md-position-rail').hidden && !document.body.classList.contains('md-edit-position')")).GetBoolean(), "Rail remains after leaving edit position");
         });
-        await TestAsync("THEME-01", "Blue Sky uses white native and preview backgrounds", async () =>
+        await TestAsync("THEME-01", "Blue Sky uses the new light-blue native and preview backgrounds", async () =>
         {
             Brand.Theme=AppTheme.BlueSky; Tab.ApplyChrome(); await Page(doc);
             Equal(Color.White.ToArgb(),Brand.Wash.ToArgb()); Equal(Color.White.ToArgb(),Tab.BackColor.ToArgb());
@@ -403,7 +407,7 @@ internal static class Checks
             Require(x.Descendants(w+"tbl").Any(),"Normalized VIEW table missing");
             Require(x.Descendants(w+"pStyle").Any(e=>(string?)e.Attribute(w+"val")=="Heading1"),"Heading style missing");
             Require(x.Descendants(w+"b").Any()&&x.Descendants(w+"i").Any(),"Inline formatting missing");
-            Require(x.Descendants(w+"color").Any(e=>(string?)e.Attribute(w+"val")=="0369A1"),"VIEW heading color missing");
+            Require(x.Descendants(w+"color").Any(e=>(string?)e.Attribute(w+"val")=="035AA6"),"VIEW heading color missing");
             Require(x.Descendants(w+"rFonts").Any(e=>(string?)e.Attribute(w+"eastAsia")==Brand.Family!.Name),"VIEW Korean font missing");
             var text=string.Concat(x.Descendants(w+"t").Select(e=>e.Value));
             Require(text.Contains("VIEW 제목") && !text.Contains("**") && !text.Contains("|---|"),"Source syntax leaked into Word");
@@ -580,6 +584,48 @@ internal static class Checks
         finally { Brand.Theme=originalTheme; }
     }
 
+    static async Task RunColumnMode()
+    {
+        await TestAsync("COLUMN-01","Multi-column mode toggles classes, persistence and column styles",async()=>
+        {
+            var colSettings=(string)typeof(Brand).GetProperty("ColumnModePath",Flags)!.GetValue(null)!;
+            var colBefore=File.Exists(colSettings)?File.ReadAllBytes(colSettings):null;
+            try
+            {
+                await Page("# 다단 검사\n\n다단 본문 내용입니다.");
+                Brand.ColumnViewMode = ColumnMode.Two;
+                Brand.SaveColumnMode();
+                Tab.ApplyColumnMode();
+                Require(File.Exists(colSettings), "Column settings not saved");
+                Equal("2", File.ReadAllText(colSettings).Trim());
+                await Task.Delay(150);
+                Equal(true, (await JS("document.body.classList.contains('multi-col')")).GetBoolean());
+                Equal(true, (await JS("document.body.classList.contains('col-2')")).GetBoolean());
+
+                Brand.ColumnViewMode = ColumnMode.Three;
+                Brand.SaveColumnMode();
+                Tab.ApplyColumnMode();
+                Equal("3", File.ReadAllText(colSettings).Trim());
+                await Task.Delay(150);
+                Equal(true, (await JS("document.body.classList.contains('col-3')")).GetBoolean());
+
+                Brand.ColumnViewMode = ColumnMode.Single;
+                Brand.SaveColumnMode();
+                Tab.ApplyColumnMode();
+                Equal("1", File.ReadAllText(colSettings).Trim());
+                await Task.Delay(150);
+                Equal(false, (await JS("document.body.classList.contains('multi-col')")).GetBoolean());
+            }
+            finally
+            {
+                Brand.ColumnViewMode = ColumnMode.Single;
+                Tab.ApplyColumnMode();
+                if(colBefore!=null) File.WriteAllBytes(colSettings, colBefore);
+                else if(File.Exists(colSettings)) File.Delete(colSettings);
+            }
+        });
+    }
+
     static async Task RunThemeDirtyState()
     {
         var originalTheme=Brand.Theme;
@@ -738,6 +784,47 @@ internal static class Checks
         });
     }
 
+    static async Task RunHomeAssociationLink()
+    {
+        await TestAsync("HOME-04", "Home association link registers .md files and leads to the Windows guide", async () =>
+        {
+            using var main = new MainForm(Array.Empty<string>()) { Opacity = 0, ShowInTaskbar = false };
+            main.Show();
+            var link = (Label)typeof(MainForm).GetField("_associationLink", Flags)!.GetValue(main)!;
+            var github = (Label)typeof(MainForm).GetField("_githubLink", Flags)!.GetValue(main)!;
+            Require(link.Visible && link.Text == "md 파일 연결프로그램 등록", "Home association link missing");
+            Require(link.Top > github.Bottom && link.Left == github.Left, "Home association link overlaps");
+            Equal(Brand.Cardinal.ToArgb(), link.ForeColor.ToArgb());
+            Equal(github.Font.FontFamily.Name, link.Font.FontFamily.Name);
+            main.Close();
+            await Task.CompletedTask;
+        });
+    }
+    static async Task RunAssociationDialogColors()
+    {
+        await TestAsync("HOME-05", "Association guide button uses the active theme color", async () =>
+        {
+            var original = Brand.Theme;
+            try
+            {
+                foreach (var theme in new[] { AppTheme.BlueSky, AppTheme.ForestGreen })
+                {
+                    Brand.Theme = theme;
+                    using var dlg = new AssocGuideDialog();
+                    IEnumerable<Control> All(Control c)
+                    {
+                        yield return c;
+                        foreach (Control child in c.Controls)
+                            foreach (var nested in All(child)) yield return nested;
+                    }
+                    var button = All(dlg).OfType<Button>().Single(b => b.Text == "기본 앱 설정 열기");
+                    Equal(Brand.Cardinal.ToArgb(), button.BackColor.ToArgb());
+                }
+            }
+            finally { Brand.Theme = original; }
+            await Task.CompletedTask;
+        });
+    }
     static async Task RunEditorIsolation()
     {
         string source="# 커서 보존\n\n"+string.Join("\n\n",Enumerable.Range(1,90).Select(i=>$"문단 {i:D2} 편집 위치를 보존하는 긴 문서입니다."));
