@@ -108,6 +108,7 @@ internal static class Checks
                 await RunThemeDirtyState();
                 await RunHomeSample();
         await RunHomeAssociationLink();
+        await RunHomeThemeLine();
         await RunAssociationDialogColors();
                 await RunEditorIsolation();
             }
@@ -586,43 +587,16 @@ internal static class Checks
 
     static async Task RunColumnMode()
     {
-        await TestAsync("COLUMN-01","Multi-column mode toggles classes, persistence and column styles",async()=>
+        await TestAsync("COLUMN-01","Multi-column mode starts at one column and is not persisted",async()=>
         {
-            var colSettings=(string)typeof(Brand).GetProperty("ColumnModePath",Flags)!.GetValue(null)!;
-            var colBefore=File.Exists(colSettings)?File.ReadAllBytes(colSettings):null;
-            try
-            {
-                await Page("# 다단 검사\n\n다단 본문 내용입니다.");
-                Brand.ColumnViewMode = ColumnMode.Two;
-                Brand.SaveColumnMode();
-                Tab.ApplyColumnMode();
-                Require(File.Exists(colSettings), "Column settings not saved");
-                Equal("2", File.ReadAllText(colSettings).Trim());
-                await Task.Delay(150);
-                Equal(true, (await JS("document.body.classList.contains('multi-col')")).GetBoolean());
-                Equal(true, (await JS("document.body.classList.contains('col-2')")).GetBoolean());
-
-                Brand.ColumnViewMode = ColumnMode.Three;
-                Brand.SaveColumnMode();
-                Tab.ApplyColumnMode();
-                Equal("3", File.ReadAllText(colSettings).Trim());
-                await Task.Delay(150);
-                Equal(true, (await JS("document.body.classList.contains('col-3')")).GetBoolean());
-
-                Brand.ColumnViewMode = ColumnMode.Single;
-                Brand.SaveColumnMode();
-                Tab.ApplyColumnMode();
-                Equal("1", File.ReadAllText(colSettings).Trim());
-                await Task.Delay(150);
-                Equal(false, (await JS("document.body.classList.contains('multi-col')")).GetBoolean());
-            }
-            finally
-            {
-                Brand.ColumnViewMode = ColumnMode.Single;
-                Tab.ApplyColumnMode();
-                if(colBefore!=null) File.WriteAllBytes(colSettings, colBefore);
-                else if(File.Exists(colSettings)) File.Delete(colSettings);
-            }
+            await Page("# 다단 검사\n\n다단 본문 내용입니다.");
+            Equal(ColumnMode.Single, Brand.ColumnViewMode);
+            await Task.Delay(100);
+            Equal(false, (await JS("document.body.classList.contains('multi-col')")).GetBoolean());
+            Brand.ColumnViewMode = ColumnMode.Two; Tab.ApplyColumnMode(); await Task.Delay(150);
+            Equal(true, (await JS("document.body.classList.contains('col-2')")).GetBoolean());
+            Brand.ColumnViewMode = ColumnMode.Single; Tab.ApplyColumnMode(); await Task.Delay(150);
+            Equal(false, (await JS("document.body.classList.contains('multi-col')")).GetBoolean());
         });
     }
 
@@ -781,6 +755,19 @@ internal static class Checks
                 else if(File.Exists(exeSample))File.Delete(exeSample);
             }
             await Task.CompletedTask;
+        });
+    }
+
+    static async Task RunHomeThemeLine()
+    {
+        await TestAsync("HOME-06", "Home screen shows the 2px active theme line", async () =>
+        {
+            using var main = new MainForm(Array.Empty<string>()) { Opacity = 0, ShowInTaskbar = false };
+            main.Show();
+            var line = (Panel)typeof(MainForm).GetField("_homeThemeLine", Flags)!.GetValue(main)!;
+            Require(line.Visible && line.Top == 0 && line.Height == 2, "Home theme line is not visible at the top");
+            Equal(Brand.FrameAccent.ToArgb(), line.BackColor.ToArgb());
+            main.Close();
         });
     }
 

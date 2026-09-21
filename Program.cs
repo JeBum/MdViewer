@@ -153,6 +153,7 @@ sealed class MainForm : Form, IMessageFilter
     readonly Panel _banner = new() { Dock = DockStyle.Top, Height = 53 };
     readonly Panel _footBand = new() { Dock = DockStyle.Bottom, Height = 53 };
     readonly Panel _home = new() { Dock = DockStyle.Fill, BackColor = Brand.Wash };
+    readonly Panel _homeThemeLine = new() { Dock = DockStyle.Top, Height = 2, BackColor = Brand.FrameAccent };
     readonly PictureBox _campus = new() { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent, Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
     readonly PictureBox _bird = new() { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent, Anchor = AnchorStyles.Top | AnchorStyles.Right };
     readonly PictureBox _logoFooter = new() { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent, Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
@@ -219,6 +220,7 @@ sealed class MainForm : Form, IMessageFilter
         Controls.Add(_home);
         Controls.Add(_banner);
         Controls.Add(_footBand);
+        Controls.Add(_homeThemeLine);
         BindDrop(this);
         BindDrop(_tabs);
         BindDrop(_home);
@@ -932,7 +934,6 @@ sealed class MainForm : Form, IMessageFilter
         if (Brand.ColumnViewMode != mode)
         {
             Brand.ColumnViewMode = mode;
-            Brand.SaveColumnMode();
             foreach (var tab in GetAllTabs())
                 tab.ApplyColumnMode();
         }
@@ -943,6 +944,7 @@ sealed class MainForm : Form, IMessageFilter
     {
         BackColor = Brand.Wash;
         _home.BackColor = Brand.Wash;
+        _homeThemeLine.BackColor = Brand.FrameAccent;
         _tabs.BackColor = Brand.Wash;
         bool sg = Brand.Theme == AppTheme.Sogang;
         _banner.Visible = false;
@@ -1039,6 +1041,7 @@ sealed class MainForm : Form, IMessageFilter
     {
         bool empty = _tabs.TabPages.Count == 0;
         _home.Visible = empty;
+        _homeThemeLine.Visible = empty;
         _home.BringToFront();
         if (!empty) _tabs.BringToFront();
         _footBand.Height = empty ? 53 : 5;
@@ -4088,7 +4091,6 @@ static class Brand
         }
         catch { }
         LoadTheme();
-        LoadColumnMode();
     }
 
     public static void LoadTheme()
@@ -4124,37 +4126,6 @@ static class Brand
     }
 
     public static ColumnMode ColumnViewMode { get; set; } = ColumnMode.Single;
-    static string ColumnModePath =>
-        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MDviewer", "columns.txt");
-
-    public static void LoadColumnMode()
-    {
-        try
-        {
-            var p = ColumnModePath;
-            if (File.Exists(p))
-            {
-                var txt = File.ReadAllText(p).Trim();
-                if (int.TryParse(txt, out int val) && Enum.IsDefined(typeof(ColumnMode), val))
-                    ColumnViewMode = (ColumnMode)val;
-                else if (Enum.TryParse<ColumnMode>(txt, true, out var mode))
-                    ColumnViewMode = mode;
-            }
-        }
-        catch { }
-    }
-
-    public static void SaveColumnMode()
-    {
-        try
-        {
-            var dir = System.IO.Path.GetDirectoryName(ColumnModePath)!;
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(ColumnModePath, ((int)ColumnViewMode).ToString());
-        }
-        catch { }
-    }
-
     static Font? _menuSogang;
     static Font? _menuAlba;
     public static bool UsesSogangFont => Theme is AppTheme.Sogang or AppTheme.BlueSky or AppTheme.ForestGreen;
