@@ -21,9 +21,9 @@ MDviewer는 Windows에서 Markdown 문서를 편집하고, 실시간으로 보�
 |---|---|
 | ![편집 모드와 검색](./Screenshots/%ED%8E%B8%EC%A7%91%EB%AA%A8%EB%93%9C_%EA%B2%80%EC%83%89.png) | ![Markdown 표 보기](./Screenshots/VIEW_%ED%91%9C.png) |
 
-| 수식 보기 |
-|---|
-| ![Markdown 수식 보기](./Screenshots/VIEW_%EC%88%98%EC%8B%9D.png) |
+| 다단 보기 | 수식 보기 |
+|---|---|
+| ![Markdown 다단 보기](./Screenshots/VIEW_%EB%8B%A4%EB%8B%A8%EB%B3%B4%EA%B8%B0.png) | ![Markdown 수식 보기](./Screenshots/VIEW_%EC%88%98%EC%8B%9D.png) |
 
 ## 요구 사항
 
