@@ -91,7 +91,7 @@ internal static class Checks
         {
             try
             {
-                if(args.Contains("--native")) { await RunThemeDirtyState(); await RunHomeSample(); return; }
+                if(args.Contains("--native")) { await RunThemeDirtyState(); await RunHomeSample(); await RunTextAndLargeFile(); return; }
                 Tab = new FileTab(null);
                 Editor = Field<RichTextBox>("_text");
                 if (!cursorOnly) RunLogic();
@@ -107,6 +107,7 @@ internal static class Checks
                 await RunColumnMode();
                 await RunThemeDirtyState();
                 await RunHomeSample();
+        await RunTextAndLargeFile();
         await RunHomeAssociationLink();
         await RunHomeThemeLine();
         await RunAssociationDialogColors();
@@ -142,6 +143,21 @@ internal static class Checks
         Test("CODE-01", "Code headers and line numbers", () => { var h = Render("```python\nfirst\nsecond\n```"); Require(h.Contains("copy-code-btn"), h); Equal(2, Regex.Matches(h, "class='line-num'").Count); });
         Test("CODE-03", "Code blocks do not render a duplicate line 1 from the fence newline", () => { var h = Render("```bat\nbuild.bat\n```"); Equal(1, Regex.Matches(h, "class='line-num'").Count); Require(!h.Contains("class='line-content'></span>"), h); });
         Test("CODE-02", "HTML inside code stays text", () => { var h = Render("```\n<script>alert(1)</script>\n```"); Require(h.Contains("&lt;script&gt;") && !h.Contains("<script>"), h); });
+        Test("MERMAID-01", "Mermaid fence becomes a diagram while CSS stays code", () => {
+            var h = Render("```mermaid\nflowchart TD\nA-->B\n```\n\n```css\n.a{color:red}\n```");
+            Require(h.Contains("class='mermaid-diagram'") && h.Contains("flowchart TD"), h);
+            Require(h.Contains("class='code-lang'>css") && !h.Contains("class='code-lang'>mermaid"), h);
+        });
+        Test("MERMAID-02", "Mermaid source is HTML-escaped and keeps its source line", () => {
+            var h = Render("intro\n\n```mermaid\nflowchart TD\nA[<script>]-->B\n```");
+            Require(h.Contains("mermaid-source") && h.Contains("&lt;script>") && !h.Contains("<script>"), h);
+            Require(Regex.IsMatch(h, @"<div class='mermaid-diagram'[^>]*data-src-line"), h);
+        });
+        Test("DIAGRAM-01", "External diagram fences remain ordinary source code", () => {
+            var h = Render("```plantuml\n@startuml\nAlice -> Bob: Hi\n@enduml\n```\n\n```dot\ndigraph G { A -> B }\n```\n\n```zenuml\nA->B: Hi\n```\n\n```kroki d2\nA -> B\n```");
+            Equal(4, Regex.Matches(h, "class='code-lang'>(" + string.Join("|", new[] { "plantuml", "dot", "zenuml", "kroki" }) + ")").Count);
+            Require(!h.Contains("diagram-block") && !h.Contains("kroki.io") && !h.Contains("zenuml.esm"), h);
+        });
         Test("CALLOUT-01", "Five documented GitHub callout types", () => { foreach (var k in new[] { "NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION" }) Require(Render($"> [!{k}] Title\n> Body").Contains("markdown-alert-" + k.ToLowerInvariant()), k); });
         Test("CALLOUT-02", "Callout containing list remains callout", () => Require(Render("> [!NOTE] Title\n>\n> - item").Contains("markdown-alert-note"), "Nested list prevents callout conversion"));
         Test("CALLOUT-03", "Collapsed callout exposes a toggle", () => { var h = Render("> [!warning]- Folded\n> Body"); Require(h.Contains("<details") || h.Contains("aria-expanded") || h.Contains("<button"), h); });
@@ -201,7 +217,25 @@ internal static class Checks
         await TestAsync("WEB-17", "Edit refresh retains active search highlights", async () => { await Page("cat cat"); await JS("findInPage('cat',false,0)"); await JS("(updatePreviewContent('<p>cat cat updated</p>',0,1),true)"); Equal(2, (await JS("document.querySelectorAll('.md-find-hl').length")).GetInt32()); });
         await TestAsync("WEB-18", "Four theme checkbox accents", async () => { foreach (var (theme, color) in new[] { (AppTheme.Sogang, "rgb(179, 41, 46)"), (AppTheme.BlueSky, "rgb(109, 167, 242)"), (AppTheme.Albatross, "rgb(67, 70, 75)"), (AppTheme.ForestGreen, "rgb(47, 107, 79)") }) { Brand.Theme = theme; await Page("- [ ] task"); Equal(color, (await JS("getComputedStyle(document.querySelector('input')).accentColor")).GetString()); } });
         await TestAsync("WEB-19", "Standalone test sample renders all eleven sections", async () => { await Page(File.ReadAllText(Path.Combine(Root, "test-sample.md")), true); Equal(11, (await JS("document.querySelectorAll('h2').length")).GetInt32()); Require((await JS("document.querySelectorAll('.json-has-error').length")).GetInt32() == 1, "Expected one intentionally invalid JSON"); });
-        await TestAsync("SPEC-05", "Mermaid produces a diagram in WebView2", async () => { await Page("```mermaid\ngraph LR; A-->B;\n```"); await Task.Delay(500); Equal(1, (await JS("document.querySelectorAll('svg').length")).GetInt32()); });
+        await TestAsync("SPEC-05", "Mermaid produces a labelled SVG in WebView2", async () => {
+            await Page("```mermaid\nflowchart LR\nA[Start]-->B[End]\n```");
+            await Wait(async () => (await JS("document.querySelectorAll('.mermaid-diagram svg').length")).GetInt32() == 1, 20000);
+            Require((await JS("document.querySelector('.mermaid-diagram svg').textContent")).ToString().Contains("Start"), "Mermaid label missing");
+            Equal(0, (await JS("document.querySelectorAll('.mermaid-error,svg[aria-roledescription=error]').length")).GetInt32());
+        });
+        await TestAsync("MERMAID-04", "The root diagram sample renders all Mermaid blocks", async () => {
+            await Page(File.ReadAllText(Path.Combine(Root, "diagram-sample.md")));
+            await Wait(async () => (await JS("document.querySelectorAll('.mermaid-diagram svg,.mermaid-error').length")).GetInt32() >= 17, 60000);
+            var state = await JS("({render:typeof window.mermaid?.render,apiRender:typeof window.mermaid?.mermaidAPI?.render,kind:Object.prototype.toString.call(window.mermaid),keys:Object.keys(window.mermaid||{}).slice(0,12),svg:document.querySelectorAll('.mermaid-diagram svg:not([aria-roledescription=error])').length,errors:[...document.querySelectorAll('.mermaid-error')].map(el=>el.textContent)})");
+            Require(state.GetProperty("svg").GetInt32() == 17 && state.GetProperty("errors").GetArrayLength() == 0, state.ToString());
+        });
+        await TestAsync("MERMAID-03", "Mermaid parse errors leave source but no bomb SVG", async () => {
+            await Page("```mermaid\nsequenceDiagram\nA->>B: hi;there\nB->>A: ok\n```");
+            await Wait(async () => (await JS("document.querySelectorAll('.mermaid-error').length")).GetInt32() == 1, 20000);
+            Equal(0, (await JS("document.querySelectorAll('body > div[id^=dmd-mermaid-]').length")).GetInt32());
+            Equal(0, (await JS("document.querySelectorAll('svg[aria-roledescription=error]').length")).GetInt32());
+            Require((await JS("document.querySelector('.mermaid-source').textContent")).ToString().Contains("hi;there"), "Source lost");
+        });
         await TestAsync("ZOOM-01", "Editor-only zoom leaves preview scale unchanged", async () => { SetField("_zoomAt", DateTime.MinValue); var before = Field<double>("_zoomWeb"); Tab.AdjustEditZoom(0.08); Equal(before, Field<double>("_zoomWeb")); Equal(1.08, Field<double>("_zoomEdit")); await Task.CompletedTask; });
         await TestAsync("ZOOM-02", "Combined zoom applies to editor and preview", async () => { SetField("_zoomAt", DateTime.MinValue); var e = Field<double>("_zoomEdit"); var w = Field<double>("_zoomWeb"); Tab.AdjustAllZoom(0.08); Equal(e + 0.08, Field<double>("_zoomEdit")); Equal(w + 0.08, Field<double>("_zoomWeb")); await Task.Delay(150); Equal("1.08", (await JS("document.documentElement.style.zoom")).GetString()); });
         await TestAsync("ZOOM-03", "Zoom OSD appears and expires", async () => { await JS("(showZoomOsd(125),true)"); Equal("125%", (await JS("document.getElementById('__zoom_osd').textContent")).GetString()); await Task.Delay(1450); Equal("0", (await JS("document.getElementById('__zoom_osd').style.opacity")).GetString()); });
@@ -719,6 +753,9 @@ internal static class Checks
             string exeSample=Path.Combine(AppContext.BaseDirectory,"test-sample.md");
             var backup=File.Exists(exeSample)?File.ReadAllBytes(exeSample):null;
             var time=backup!=null?File.GetLastWriteTimeUtc(exeSample):DateTime.MinValue;
+            string exeDiagram=Path.Combine(AppContext.BaseDirectory,"diagram-sample.md");
+            var diagramBackup=File.Exists(exeDiagram)?File.ReadAllBytes(exeDiagram):null;
+            var diagramTime=diagramBackup!=null?File.GetLastWriteTimeUtc(exeDiagram):DateTime.MinValue;
             var cwd=Environment.CurrentDirectory;
             using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
             try
@@ -728,16 +765,24 @@ internal static class Checks
                 Environment.CurrentDirectory=directory;
                 main.Show();
                 var link=(Label)typeof(MainForm).GetField("_sampleLink",Flags)!.GetValue(main)!;
+                var diagram=(Label)typeof(MainForm).GetField("_diagramSampleLink",Flags)!.GetValue(main)!;
                 var intro=(Label)typeof(MainForm).GetField("_intro",Flags)!.GetValue(main)!;
                 var github=(Label)typeof(MainForm).GetField("_githubLink",Flags)!.GetValue(main)!;
+                var association=(Label)typeof(MainForm).GetField("_associationLink",Flags)!.GetValue(main)!;
                 Require(link.Visible && link.Text=="test-sample.md 열기","Home sample link missing");
                 Require(link.Top>intro.Bottom && link.Left==intro.Left,"Home sample link overlaps");
+                Require(diagram.Visible && diagram.Text=="diagram-sample.md 열기","Home diagram link missing");
+                Require(diagram.Top>link.Bottom && diagram.Left==link.Left,"Home diagram link overlaps");
+                Require(association.Visible && association.Text=="md 파일 연결프로그램 등록","Home association link missing");
+                Require(association.Top>intro.Bottom && association.Left>link.Left,"Home association link is not in the right column");
                 Require(github.Visible && github.Text=="GitHub 저장소","Home GitHub link missing");
-                Require(github.Top>link.Bottom && github.Left==link.Left,"Home GitHub link overlaps");
+                Require(github.Top>association.Bottom && github.Left==association.Left,"Home GitHub link overlaps");
                 Equal("https://github.com/JeBum/MdViewer",github.Tag as string);
                 Equal(Brand.Cardinal.ToArgb(),link.ForeColor.ToArgb());
+                Equal(Brand.Cardinal.ToArgb(),diagram.ForeColor.ToArgb());
                 Equal(Brand.Cardinal.ToArgb(),github.ForeColor.ToArgb());
                 Equal(intro.Font.FontFamily.Name,link.Font.FontFamily.Name);
+                Equal(link.Font.FontFamily.Name,diagram.Font.FontFamily.Name);
                 Equal(link.Font.FontFamily.Name,github.Font.FontFamily.Name);
                 typeof(Control).GetMethod("OnClick",Flags)!.Invoke(link,new object[]{EventArgs.Empty});
                 var tab=main.GetAllTabs().Single();Equal(exeSample,tab.Path);
@@ -746,6 +791,10 @@ internal static class Checks
                 Require(editor.Text.Contains("실행 파일 폴더의 기존 샘플"),"Wrong sample opened");
                 Require(expected.SequenceEqual(File.ReadAllBytes(exeSample)),"Click overwrote existing sample");
                 Require(File.ReadAllText(path).Contains("사용자가 수정한 샘플"),"Working directory sample changed");
+                typeof(Control).GetMethod("OnClick",Flags)!.Invoke(diagram,new object[]{EventArgs.Empty});
+                var diagramTab=main.GetAllTabs().Last();
+                Equal(exeDiagram,diagramTab.Path);
+                Require(File.Exists(exeDiagram),"Diagram sample was not extracted beside executable");
             }
             finally
             {
@@ -753,7 +802,68 @@ internal static class Checks
                 main.Close();Environment.CurrentDirectory=cwd;
                 if(backup!=null){File.WriteAllBytes(exeSample,backup);File.SetLastWriteTimeUtc(exeSample,time);}
                 else if(File.Exists(exeSample))File.Delete(exeSample);
+                if(diagramBackup!=null){File.WriteAllBytes(exeDiagram,diagramBackup);File.SetLastWriteTimeUtc(exeDiagram,diagramTime);}
+                else if(File.Exists(exeDiagram))File.Delete(exeDiagram);
             }
+            await Task.CompletedTask;
+        });
+        string diagramDirectory=Path.Combine(Root,"obj","verification","diagram-sample-"+Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(diagramDirectory);
+        string diagramPath=Path.Combine(diagramDirectory,"diagram-sample.md");
+        await TestAsync("HOME-07","Missing diagram sample is extracted beside the executable without overwriting an existing file",async()=>
+        {
+            Equal(diagramPath,MainForm.EnsureDiagramSampleFile(diagramDirectory));
+            Require(File.ReadAllBytes(Path.Combine(Root,"diagram-sample.md")).SequenceEqual(File.ReadAllBytes(diagramPath)),"Embedded diagram sample differs from repository sample");
+            Equal(1,Directory.GetFiles(diagramDirectory).Length);
+            await Task.CompletedTask;
+        });
+    }
+
+    static async Task RunTextAndLargeFile()
+    {
+        await TestAsync("TEXT-01","Common source and configuration extensions are accepted as text",async()=>
+        {
+            foreach(var ext in new[]{".html",".ini",".bat",".cmd",".log",".xml",".css",".js",".py"})
+                Require(MainForm.IsSupportedDocument("fixture"+ext),"Extension rejected: "+ext);
+            await Task.CompletedTask;
+        });
+        await TestAsync("PDF-01","PDF files are accepted as view-only documents",async()=>
+        {
+            Require(MainForm.IsSupportedDocument("fixture.pdf"),"PDF extension rejected");
+            Require(MainForm.IsPdfDocument("fixture.pdf"),"PDF detector failed");
+            Require(!MainForm.IsTextDocument("fixture.pdf"),"PDF must not be treated as editable text");
+            foreach(var ext in new[]{".png",".jpg",".mp4",".mp3"})
+                Require(MainForm.IsSupportedDocument("fixture"+ext),"Browser extension rejected: "+ext);
+            await Task.CompletedTask;
+        });
+        await TestAsync("LARGE-01","Tail reader seeks from EOF without reading the complete file",async()=>
+        {
+            var path=Path.Combine(Artifacts,"large-tail.log");
+            const long length=100L*1024*1024+4096;
+            using(var fs=new FileStream(path,FileMode.Create,FileAccess.ReadWrite,FileShare.Read))
+            {
+                fs.SetLength(length);
+                fs.Position=0;
+                var old=System.Text.Encoding.UTF8.GetBytes("OLD_BEGINNING_MARKER\n");
+                fs.Write(old);
+                fs.Position=length-256;
+                var latest=System.Text.Encoding.UTF8.GetBytes("\nLATEST_LOG_MARKER\n");
+                fs.Write(latest);
+            }
+            var tail=FileTab.ReadTailBytes(path,50*1024*1024);
+            Require(tail.Contains("LATEST_LOG_MARKER",StringComparison.Ordinal),"Tail marker missing");
+            Require(!tail.Contains("OLD_BEGINNING_MARKER",StringComparison.Ordinal),"Reader returned the file beginning");
+            await Task.CompletedTask;
+        });
+        await TestAsync("LICENSE-01","Home displays third-party license attribution",async()=>
+        {
+            using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
+            main.Show();
+            var info=(Label)typeof(MainForm).GetField("_licenseInfo",Flags)!.GetValue(main)!;
+            Require(info.Visible && info.Text.Contains("MIT",StringComparison.Ordinal),"MIT attribution missing");
+            Require(info.Text.Contains("BSD-2-Clause",StringComparison.Ordinal),"BSD attribution missing");
+            Require(info.Text.Contains("WebView2",StringComparison.Ordinal),"WebView2 attribution missing");
+            main.Close();
             await Task.CompletedTask;
         });
     }

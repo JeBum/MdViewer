@@ -27,6 +27,7 @@ namespace MDviewer;
 enum SplitMode { None, Vertical, Horizontal }
 enum AppTheme { Sogang, Albatross, BlueSky, ForestGreen }
 enum ColumnMode { Single = 1, Two = 2, Three = 3, Auto = 0 }
+enum LargeFileLoadMode { Tail50Mb, Chunked, Full }
 
 static class Program
 {
@@ -159,8 +160,10 @@ sealed class MainForm : Form, IMessageFilter
     readonly PictureBox _logoFooter = new() { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent, Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
     readonly Label _intro = new();
     readonly Label _sampleLink = new();
+    readonly Label _diagramSampleLink = new();
     readonly Label _githubLink = new();
     readonly Label _associationLink = new();
+    readonly Label _licenseInfo = new();
     readonly Label _help = new();
     readonly Label _helpTitle = new();
     readonly Label _helpMouse = new();
@@ -461,6 +464,13 @@ sealed class MainForm : Form, IMessageFilter
         _sampleLink.BackColor = Color.Transparent;
         _sampleLink.UseCompatibleTextRendering = true;
         _sampleLink.Click += (_, _) => OpenTestSample();
+        _diagramSampleLink.Text = "diagram-sample.md 열기";
+        _diagramSampleLink.AutoSize = true;
+        _diagramSampleLink.Cursor = Cursors.Hand;
+        _diagramSampleLink.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+        _diagramSampleLink.BackColor = Color.Transparent;
+        _diagramSampleLink.UseCompatibleTextRendering = true;
+        _diagramSampleLink.Click += (_, _) => OpenDiagramSample();
         _githubLink.Text = "GitHub 저장소";
         _githubLink.AutoSize = true;
         _githubLink.Cursor = Cursors.Hand;
@@ -476,6 +486,15 @@ sealed class MainForm : Form, IMessageFilter
         _associationLink.BackColor = Color.Transparent;
         _associationLink.UseCompatibleTextRendering = true;
         _associationLink.Click += (_, _) => RegisterMdAssociation();
+        // 요구사항: 홈 화면에 실제 포함된 서드파티 구성요소와 라이선스를 표시한다.
+        _licenseInfo.Text =
+            "사용 라이선스\n" +
+            "MIT: Mermaid.js 11.17.2 · KaTeX 0.16.47 · Open XML SDK 3.3.0\n" +
+            "BSD-2-Clause: Markdig 0.41.3 · Microsoft WebView2 배포 라이선스";
+        _licenseInfo.AutoSize = true;
+        _licenseInfo.BackColor = Color.Transparent;
+        _licenseInfo.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+        _licenseInfo.UseCompatibleTextRendering = true;
         _helpTitle.Text = "단축키";
         _helpTitle.AutoSize = true;
         _helpTitle.BackColor = Color.Transparent;
@@ -522,8 +541,10 @@ sealed class MainForm : Form, IMessageFilter
         _home.Resize += (_, _) => LayoutHome();
         _home.Controls.Add(_intro);
         _home.Controls.Add(_sampleLink);
+        _home.Controls.Add(_diagramSampleLink);
         _home.Controls.Add(_githubLink);
         _home.Controls.Add(_associationLink);
+        _home.Controls.Add(_licenseInfo);
         _home.Controls.Add(_helpTitle);
         _home.Controls.Add(_help);
         _home.Controls.Add(_helpMouseTitle);
@@ -544,8 +565,10 @@ sealed class MainForm : Form, IMessageFilter
     {
         _intro.UseCompatibleTextRendering = true;
         _sampleLink.UseCompatibleTextRendering = true;
+        _diagramSampleLink.UseCompatibleTextRendering = true;
         _githubLink.UseCompatibleTextRendering = true;
         _associationLink.UseCompatibleTextRendering = true;
+        _licenseInfo.UseCompatibleTextRendering = true;
         _helpTitle.UseCompatibleTextRendering = true;
         _help.UseCompatibleTextRendering = true;
         _helpMouseTitle.UseCompatibleTextRendering = true;
@@ -555,16 +578,20 @@ sealed class MainForm : Form, IMessageFilter
             sg ? Brand.Sogang(em, st) : new Font("Segoe UI", em, st, GraphicsUnit.Point);
         _intro.Font = F(10f);
         _sampleLink.Font = F(10f, FontStyle.Underline);
+        _diagramSampleLink.Font = F(10f, FontStyle.Underline);
         _githubLink.Font = F(10f, FontStyle.Underline);
         _associationLink.Font = F(10f, FontStyle.Underline);
+        _licenseInfo.Font = F(8f);
         _helpTitle.Font = F(10f, FontStyle.Bold);
         _help.Font = F(8f);
         _helpMouseTitle.Font = F(10f, FontStyle.Bold);
         _helpMouse.Font = F(8f);
         _intro.ForeColor = Brand.Ink;
         _sampleLink.ForeColor = Brand.Cardinal;
+        _diagramSampleLink.ForeColor = Brand.Cardinal;
         _githubLink.ForeColor = Brand.Cardinal;
         _associationLink.ForeColor = Brand.Cardinal;
+        _licenseInfo.ForeColor = Brand.Ink;
         _helpTitle.ForeColor = Brand.Ink;
         _help.ForeColor = Brand.Ink;
         _helpMouseTitle.ForeColor = Brand.Ink;
@@ -586,9 +613,14 @@ sealed class MainForm : Form, IMessageFilter
             w / 2,
             _campus.Top + (int)(campH * 0.28));
         _logoFooter.Location = new Point(w - _logoFooter.Width - 24, h - _logoFooter.Height - 20);
-        _sampleLink.Location = new Point(_intro.Left, _intro.Bottom + _intro.Font.Height);
-        _githubLink.Location = new Point(_sampleLink.Left, _sampleLink.Bottom + 10);
-        _associationLink.Location = new Point(_sampleLink.Left, _githubLink.Bottom + 10);
+        // 요구사항: 홈 링크 4개를 샘플 파일 2개(왼쪽), MD 연결(오른쪽 상단), GitHub(오른쪽 하단)의 다단 구조로 표시한다.
+        int linksTop = _intro.Bottom + _intro.Font.Height;
+        int rightX = Math.Max(_intro.Left, Math.Min(w - 260, w / 2));
+        _sampleLink.Location = new Point(_intro.Left, linksTop);
+        _diagramSampleLink.Location = new Point(_sampleLink.Left, _sampleLink.Bottom + 10);
+        _associationLink.Location = new Point(rightX, linksTop);
+        _githubLink.Location = new Point(rightX, _associationLink.Bottom + 10);
+        _licenseInfo.Location = new Point(rightX, _githubLink.Bottom + 18);
         int blockH = _helpTitle.Height + 2 + Math.Max(_help.Height, _helpMouse.Height);
         int helpY = Math.Max(80, h - blockH - 8);
         _helpTitle.Location = new Point(28, helpY);
@@ -599,8 +631,10 @@ sealed class MainForm : Form, IMessageFilter
         _bird.BringToFront();
         _intro.BringToFront();
         _sampleLink.BringToFront();
+        _diagramSampleLink.BringToFront();
         _githubLink.BringToFront();
         _associationLink.BringToFront();
+        _licenseInfo.BringToFront();
         _helpTitle.BringToFront();
         _help.BringToFront();
         _helpMouseTitle.BringToFront();
@@ -622,6 +656,20 @@ sealed class MainForm : Form, IMessageFilter
         }
     }
 
+    void OpenDiagramSample()
+    {
+        try
+        {
+            // 단일 파일 배포에서도 실행 파일과 같은 폴더에 샘플을 생성하고 기존 파일은 보존한다.
+            OpenFile(EnsureDiagramSampleFile(AppContext.BaseDirectory));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "다이어그램 샘플 문서를 열 수 없습니다.\n" + ex.Message,
+                "diagram-sample.md 열기 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
     internal static string EnsureTestSampleFile(string directory)
     {
         var path = System.IO.Path.Combine(directory, "test-sample.md");
@@ -634,6 +682,24 @@ sealed class MainForm : Form, IMessageFilter
             using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 source.CopyTo(output);
             // 클릭 도중 다른 프로세스가 파일을 만들었어도 기존 파일을 덮어쓰지 않는다.
+            try { File.Move(temporary, path, overwrite: false); }
+            catch (IOException) when (File.Exists(path)) { }
+            return path;
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    internal static string EnsureDiagramSampleFile(string directory)
+    {
+        var path = System.IO.Path.Combine(directory, "diagram-sample.md");
+        if (File.Exists(path)) return path;
+        using var source = Assembly.GetExecutingAssembly().GetManifestResourceStream("MDviewer.diagram-sample.md")
+            ?? throw new InvalidOperationException("내장 다이어그램 샘플 문서를 찾을 수 없습니다.");
+        var temporary = System.IO.Path.Combine(directory, ".diagram-sample-" + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                source.CopyTo(output);
             try { File.Move(temporary, path, overwrite: false); }
             catch (IOException) when (File.Exists(path)) { }
             return path;
@@ -727,11 +793,12 @@ sealed class MainForm : Form, IMessageFilter
         {
             if (_menuBusy || Current == null) return;
             Current.EditMode = _miEdit.Checked;
-            if (_miEdit.Checked && Current.Split == SplitMode.None)
+            if (Current.EditMode && Current.Split == SplitMode.None)
                 Current.Split = SplitMode.Vertical;
             _menuBusy = true;
             try
             {
+                _miEdit.Checked = Current.EditMode;
                 _miVert.Checked = Current.Split == SplitMode.Vertical;
                 _miHorz.Checked = Current.Split == SplitMode.Horizontal;
             }
@@ -847,6 +914,15 @@ sealed class MainForm : Form, IMessageFilter
     public void ToggleEditMode()
     {
         if (Current == null) return;
+        if (!Current.EditMode && IsBrowserDocument(Current.Path))
+        {
+            MessageBox.Show(this,
+                IsPdfDocument(Current.Path)
+                    ? "PDF 문서는 읽기 전용입니다. 편집 모드로 전환할 수 없습니다."
+                    : "브라우저 표시 파일은 읽기 전용입니다. 편집 모드로 전환할 수 없습니다.",
+                "편집 모드 불가", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         _menuBusy = true;
         try
         {
@@ -1082,7 +1158,7 @@ sealed class MainForm : Form, IMessageFilter
     {
         using var dlg = new OpenFileDialog
         {
-            Filter = "Markdown (*.md;*.markdown;*.txt)|*.md;*.markdown;*.txt|JSON (*.json;*.jsonc)|*.json;*.jsonc|All files (*.*)|*.*",
+            Filter = "열 수 있는 문서 (*.pdf;*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.mp3;*.wav;*.mp4;*.webm;*.md;*.markdown;*.txt;*.html;*.htm;*.ini;*.cfg;*.conf;*.bat;*.cmd;*.log;*.json;*.jsonc;*.xml;*.css;*.js;*.ts;*.cs;*.h;*.c;*.cpp;*.py;*.sh)|*.pdf;*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.mp3;*.wav;*.mp4;*.webm;*.md;*.markdown;*.txt;*.html;*.htm;*.ini;*.cfg;*.conf;*.bat;*.cmd;*.log;*.json;*.jsonc;*.xml;*.css;*.js;*.ts;*.cs;*.h;*.c;*.cpp;*.py;*.sh|모든 파일 (*.*)|*.*",
             Multiselect = true
         };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
@@ -1183,11 +1259,39 @@ sealed class MainForm : Form, IMessageFilter
         path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase) ||
         path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsMarkdownSource(string path) =>
+        path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase);
+
     public static bool IsJson(string path) =>
         path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ||
         path.EndsWith(".jsonc", StringComparison.OrdinalIgnoreCase);
 
-    public static bool IsSupportedDocument(string path) => IsMd(path) || IsJson(path);
+    public static bool IsPdfDocument(string path) =>
+        path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsBrowserDocument(string path)
+    {
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".pdf" or ".png" or ".jpg" or ".jpeg" or ".gif" or
+            ".webp" or ".bmp" or ".ico" or ".tif" or ".tiff" or
+            ".mp3" or ".wav" or ".ogg" or ".mp4" or ".webm" or ".m4v";
+    }
+
+    public static bool IsTextDocument(string path)
+    {
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".md" or ".markdown" or ".txt" or ".html" or ".htm" or
+            ".ini" or ".cfg" or ".conf" or ".bat" or ".cmd" or ".log" or
+            ".json" or ".jsonc" or ".xml" or ".css" or ".js" or ".ts" or
+            ".cs" or ".h" or ".hpp" or ".c" or ".cpp" or ".java" or ".py" or
+            ".sh" or ".ps1" or ".yaml" or ".yml" or ".toml" or ".properties" or
+            ".env" or ".csv" or ".sql" or ".svg";
+    }
+
+    public static bool IsSupportedDocument(string path) =>
+        IsTextDocument(path) || IsBrowserDocument(path);
 
     public static bool IsMdPublic(string path) => IsMd(path);
 
@@ -1283,6 +1387,80 @@ sealed class AssocGuideDialog : Form
         CancelButton = btnClose;
     }
 }
+sealed class LargeFileLoadDialog : Form
+{
+    readonly RadioButton _tail = new();
+    readonly RadioButton _chunked = new();
+    readonly RadioButton _full = new();
+    public LargeFileLoadMode Choice { get; private set; } = LargeFileLoadMode.Tail50Mb;
+
+    public LargeFileLoadDialog(string path, long bytes)
+    {
+        Text = "대용량 텍스트 파일 열기";
+        Width = 560;
+        Height = 300;
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        BackColor = Brand.Paper;
+        Font = Brand.Ui(9f);
+
+        var title = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 58,
+            Padding = new Padding(18, 14, 18, 4),
+            Text = "파일 크기가 100MB를 초과합니다.\n" +
+                System.IO.Path.GetFileName(path) + " (" + (bytes / 1024d / 1024d).ToString("N1") + "MB)",
+            Font = Brand.Ui(10f, FontStyle.Bold),
+            BackColor = Brand.Wash
+        };
+        var options = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Padding = new Padding(18, 12, 12, 4)
+        };
+        _tail.Text = "최신 로그만 보기 (추천) — EOF에서 마지막 50MB만 빠르게 읽기";
+        _chunked.Text = "처음부터 분할 로드 — 1~2MB씩 읽고 편집기 하단에서 계속 불러오기";
+        _full.Text = "전체 로드 — 성능 저하를 감수하고 파일 전체 읽기";
+        foreach (var radio in new[] { _tail, _chunked, _full })
+        {
+            radio.AutoSize = false;
+            radio.Width = 500;
+            radio.Height = 32;
+            radio.Cursor = Cursors.Hand;
+            options.Controls.Add(radio);
+        }
+        _tail.Checked = true;
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 48,
+            FlowDirection = FlowDirection.RightToLeft,
+            Padding = new Padding(12, 8, 12, 8)
+        };
+        var open = new Button { Text = "열기", Width = 86, Height = 28, DialogResult = DialogResult.OK };
+        var cancel = new Button { Text = "취소", Width = 86, Height = 28, DialogResult = DialogResult.Cancel };
+        open.Click += (_, _) =>
+        {
+            Choice = _tail.Checked ? LargeFileLoadMode.Tail50Mb :
+                _chunked.Checked ? LargeFileLoadMode.Chunked : LargeFileLoadMode.Full;
+        };
+        buttons.Controls.Add(cancel);
+        buttons.Controls.Add(open);
+        Controls.Add(options);
+        Controls.Add(buttons);
+        Controls.Add(title);
+        AcceptButton = open;
+        CancelButton = cancel;
+    }
+}
+
 sealed class FileTab : Panel
 {
     public static string LastFindQuery = "";
@@ -1340,9 +1518,21 @@ sealed class FileTab : Panel
     bool _dirty;
     bool _suspendWatch;
     string _loaded = "";
+    const long LargeFileThresholdBytes = 100L * 1024 * 1024;
+    const int LargeFileTailBytes = 50 * 1024 * 1024;
+    const int LargeFileChunkChars = 1_000_000;
+    readonly object _largeReaderGate = new();
+    StreamReader? _largeReader;
+    bool _largeStreaming;
+    bool _largeChunkLoading;
+    bool _largeChunkEnded;
+    bool _largeEditorOnly;
+    int _loadGeneration;
 
     public string Path { get; private set; }
     public string Title => string.IsNullOrEmpty(Path) ? "제목 없음" : System.IO.Path.GetFileName(Path);
+    public bool IsPdf => MainForm.IsPdfDocument(Path);
+    public bool IsBrowserDocument => MainForm.IsBrowserDocument(Path);
     public TabPage? HostPage { get; set; }
     public bool Dirty
     {
@@ -1381,9 +1571,19 @@ sealed class FileTab : Panel
         get => _editMode;
         set
         {
+            if (value && IsBrowserDocument)
+            {
+                MessageBox.Show(FindForm(),
+                    IsPdf
+                        ? "PDF 문서는 읽기 전용입니다. 편집 모드로 전환할 수 없습니다."
+                        : "브라우저 표시 파일은 읽기 전용입니다. 편집 모드로 전환할 수 없습니다.",
+                    "편집 모드 불가", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (_largeEditorOnly && !value) return;
             _editMode = value;
             if (!value) _splitMode = SplitMode.None;
-            _text.ReadOnly = !value;
+            _text.ReadOnly = !value || _largeEditorOnly;
             ApplyLayout();
             RefreshPreview(forceReload: true);
             if (value)
@@ -1620,6 +1820,7 @@ sealed class FileTab : Panel
         {
             _gutter.Invalidate();
             if (_editMode) SyncEditorToWeb();
+            MaybeLoadNextLargeChunk();
         };
         _text.HScroll += (_, _) => _gutter.Invalidate();
         _text.ContentsResized += (_, _) => _gutter.Invalidate();
@@ -1881,10 +2082,14 @@ sealed class FileTab : Panel
         core.NavigationStarting += (_, e) =>
         {
             if (string.IsNullOrWhiteSpace(e.Uri)) return;
+            var browserUri = IsBrowserDocument && File.Exists(Path)
+                ? new Uri(System.IO.Path.GetFullPath(Path)).AbsoluteUri
+                : "";
             if (e.Uri.Equals("about:blank", StringComparison.OrdinalIgnoreCase) ||
                 e.Uri.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase) ||
                 e.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
-                e.Uri.StartsWith("https://mdviewer.local/", StringComparison.OrdinalIgnoreCase))
+                e.Uri.StartsWith("https://mdviewer.local/", StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(browserUri) && e.Uri.StartsWith(browserUri, StringComparison.OrdinalIgnoreCase)))
                 return;
 
             e.Cancel = true;
@@ -2765,7 +2970,12 @@ sealed class FileTab : Panel
         try
         {
             _split.Panel1Collapsed = false;
-            if (_editMode)
+            if (_largeEditorOnly)
+            {
+                _split.Panel2Collapsed = true;
+                Host(_split.Panel1, _editPane);
+            }
+            else if (_editMode)
             {
                 _split.Panel2Collapsed = false;
                 Host(_split.Panel1, _editPane);
@@ -2825,6 +3035,7 @@ sealed class FileTab : Panel
     {
         _previewTick.Stop();
         _previewTick.Dispose();
+        CloseLargeReader();
         _watch.EnableRaisingEvents = false;
         _watch.Dispose();
     }
@@ -2900,6 +3111,21 @@ sealed class FileTab : Panel
 
     public void Save()
     {
+        if (IsBrowserDocument)
+        {
+            MessageBox.Show(FindForm(),
+                IsPdf ? "PDF 문서는 읽기 전용이라 저장할 수 없습니다."
+                      : "브라우저 표시 파일은 읽기 전용이라 저장할 수 없습니다.",
+                "저장 불가", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        if (_largeEditorOnly)
+        {
+            MessageBox.Show(FindForm(),
+                "현재 문서는 대용량 부분 로드 상태입니다.\n전체 로드를 선택한 뒤 저장해 주세요.",
+                "부분 로드 문서", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         if (string.IsNullOrEmpty(Path))
         {
             using var dlg = new SaveFileDialog
@@ -2931,32 +3157,278 @@ sealed class FileTab : Panel
 
     public void Reload()
     {
+        var generation = Interlocked.Increment(ref _loadGeneration);
+        CloseLargeReader();
+        _largeStreaming = false;
+        _largeChunkEnded = false;
+        _largeEditorOnly = false;
         if (string.IsNullOrEmpty(Path))
         {
             _loaded = _text.Text;
             RefreshPreview(forceReload: true);
             return;
         }
+        if (IsBrowserDocument)
+        {
+            _text.Clear();
+            _loaded = "";
+            _editMode = false;
+            _splitMode = SplitMode.None;
+            ApplyLayout();
+            RefreshPreview(forceReload: true);
+            return;
+        }
         try
         {
+            var length = new FileInfo(Path).Length;
+            if (length > LargeFileThresholdBytes)
+            {
+                BeginLargeFileLoad(length, generation);
+                return;
+            }
             using var fs = new FileStream(Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var sr = new StreamReader(fs, Encoding.UTF8, true);
             var content = sr.ReadToEnd();
-            var pos = _text.SelectionStart;
-            _text.Text = content;
-            // RichTextBox는 CRLF/CR을 LF로 정규화한다. 수정 비교도 같은 표현을 사용한다.
-            _loaded = _text.Text;
-            Native.ApplyLineSpacing(_text, 1.4f);
-            Dirty = false;
-            _text.SelectionStart = Math.Min(pos, _text.TextLength);
+            ApplyLoadedContent(content, generation, partial: false, scrollBottom: false);
+        }
+        catch (Exception ex)
+        {
+            _text.Text = "(cannot read file: " + ex.Message + ")";
+        }
+    }
+
+    void BeginLargeFileLoad(long length, int generation)
+    {
+        using var dialog = new LargeFileLoadDialog(Path, length);
+        if (dialog.ShowDialog(FindForm()) != DialogResult.OK) return;
+        switch (dialog.Choice)
+        {
+            case LargeFileLoadMode.Tail50Mb:
+                _ = LoadTailAsync(generation);
+                break;
+            case LargeFileLoadMode.Chunked:
+                _ = LoadChunkedAsync(generation);
+                break;
+            default:
+                _ = LoadFullAsync(generation);
+                break;
+        }
+    }
+
+    async Task LoadFullAsync(int generation)
+    {
+        try
+        {
+            var content = await Task.Run(() => File.ReadAllText(Path, Encoding.UTF8));
+            if (generation != _loadGeneration || IsDisposed) return;
+            ApplyLoadedContent(content, generation, partial: false, scrollBottom: false);
+        }
+        catch (Exception ex) { ShowLoadError(ex); }
+    }
+
+    async Task LoadTailAsync(int generation)
+    {
+        try
+        {
+            var content = await Task.Run(() => ReadTailBytes(Path, LargeFileTailBytes));
+            if (generation != _loadGeneration || IsDisposed) return;
+            ApplyLoadedContent(content, generation, partial: true, scrollBottom: true);
+        }
+        catch (Exception ex) { ShowLoadError(ex); }
+    }
+
+    async Task LoadChunkedAsync(int generation)
+    {
+        try
+        {
+            var stream = new FileStream(Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 128 * 1024, FileOptions.SequentialScan);
+            var reader = new StreamReader(stream, new UTF8Encoding(false, false), true, 128 * 1024);
+            lock (_largeReaderGate)
+            {
+                if (generation != _loadGeneration) { reader.Dispose(); return; }
+                _largeReader = reader;
+                _largeStreaming = true;
+            }
+            var content = await ReadNextLargeChunkAsync(generation);
+            if (generation != _loadGeneration || IsDisposed) return;
+            ApplyLoadedContent(content, generation, partial: true, scrollBottom: false);
+        }
+        catch (Exception ex) { ShowLoadError(ex); }
+    }
+
+    async Task<string> ReadNextLargeChunkAsync(int generation)
+    {
+        return await Task.Run(() =>
+        {
+            lock (_largeReaderGate)
+            {
+                if (generation != _loadGeneration || _largeReader == null) return "";
+                var chars = new char[LargeFileChunkChars];
+                var count = _largeReader.ReadBlock(chars, 0, chars.Length);
+                if (count == 0) _largeChunkEnded = true;
+                return new string(chars, 0, count);
+            }
+        });
+    }
+
+    void MaybeLoadNextLargeChunk()
+    {
+        if (!_largeStreaming || _largeChunkLoading || _largeChunkEnded || !_largeEditorOnly) return;
+        var bottom = _text.GetCharIndexFromPosition(new Point(0, Math.Max(0, _text.ClientSize.Height - 8)));
+        var bottomLine = _text.GetLineFromCharIndex(Math.Max(0, bottom));
+        if (bottomLine < Math.Max(0, _text.Lines.Length - 10)) return;
+        _largeChunkLoading = true;
+        var generation = _loadGeneration;
+        _ = AppendNextLargeChunkAsync(generation);
+    }
+
+    async Task AppendNextLargeChunkAsync(int generation)
+    {
+        try
+        {
+            var chunk = await ReadNextLargeChunkAsync(generation);
+            if (generation != _loadGeneration || IsDisposed || string.IsNullOrEmpty(chunk)) return;
+            var oldSelection = _text.SelectionStart;
+            _suppressPreviewRefresh = true;
+            try
+            {
+                _text.AppendText(chunk);
+                _loaded = _text.Text;
+                _text.SelectionStart = Math.Min(oldSelection, _text.TextLength);
+            }
+            finally { _suppressPreviewRefresh = false; }
             _gutter.Width = GutterWidth(_text);
             _gutter.Invalidate();
-            RefreshPreview(forceReload: true);
+            QueueSyntaxHighlight(generation);
         }
-        catch
+        catch (Exception ex) { if (generation == _loadGeneration) ShowLoadError(ex); }
+        finally { _largeChunkLoading = false; }
+    }
+
+    void ApplyLoadedContent(string content, int generation, bool partial, bool scrollBottom)
+    {
+        if (generation != _loadGeneration || IsDisposed) return;
+        var position = scrollBottom ? content.Length : Math.Min(_text.SelectionStart, content.Length);
+        _suppressPreviewRefresh = true;
+        try
         {
-            _text.Text = "(cannot read file)";
+            _largeEditorOnly = partial;
+            _editMode = partial;
+            _text.ReadOnly = partial || !_editMode;
+            _text.Text = content;
+            _loaded = _text.Text;
+            Dirty = false;
+            Native.ApplyLineSpacing(_text, 1.4f);
+            _text.SelectionStart = Math.Min(position, _text.TextLength);
+            _text.SelectionLength = 0;
         }
+        finally { _suppressPreviewRefresh = false; }
+        _gutter.Width = GutterWidth(_text);
+        _gutter.Invalidate();
+        ApplyLayout();
+        if (scrollBottom) _text.ScrollToCaret();
+        if (partial) QueueSyntaxHighlight(generation);
+        else RefreshPreview(forceReload: true);
+    }
+
+    internal static string ReadTailBytes(string path, int maxBytes)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 128 * 1024, FileOptions.RandomAccess);
+        var start = Math.Max(0L, stream.Length - maxBytes);
+        stream.Seek(start, SeekOrigin.Begin);
+        var remaining = checked((int)(stream.Length - start));
+        var bytes = new byte[remaining];
+        var read = 0;
+        while (read < bytes.Length)
+        {
+            var count = stream.Read(bytes, read, bytes.Length - read);
+            if (count == 0) break;
+            read += count;
+        }
+        var text = new UTF8Encoding(false, false).GetString(bytes, 0, read);
+        if (start > 0)
+        {
+            var firstLine = text.IndexOf('\n');
+            if (firstLine >= 0) text = text[(firstLine + 1)..];
+        }
+        return text;
+    }
+
+    void ShowLoadError(Exception ex)
+    {
+        if (IsDisposed) return;
+        MessageBox.Show(FindForm(), "파일을 읽을 수 없습니다.\n" + ex.Message,
+            "대용량 파일 열기 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
+    void CloseLargeReader()
+    {
+        lock (_largeReaderGate)
+        {
+            try { _largeReader?.Dispose(); } catch { }
+            _largeReader = null;
+            _largeStreaming = false;
+            _largeChunkLoading = false;
+            _largeChunkEnded = false;
+        }
+    }
+
+    void QueueSyntaxHighlight(int generation)
+    {
+        if (!_largeEditorOnly || IsDisposed) return;
+        var source = _text.Text;
+        var extension = System.IO.Path.GetExtension(Path).ToLowerInvariant();
+        _ = Task.Run(() => BuildSyntaxRanges(source, extension))
+            .ContinueWith(task =>
+            {
+                if (task.IsFaulted || generation != _loadGeneration || IsDisposed) return;
+                try
+                {
+                    BeginInvoke(() => ApplySyntaxRanges(task.Result, generation));
+                }
+                catch { }
+            }, TaskScheduler.Default);
+    }
+
+    static List<(int Start, int Length, Color Color)> BuildSyntaxRanges(string source, string extension)
+    {
+        var limit = Math.Min(source.Length, 300_000);
+        var visible = source[..limit];
+        var ranges = new List<(int, int, Color)>();
+        string pattern = extension is ".ini" or ".cfg" or ".conf"
+            ? @"(?m)^\s*\[[^\r\n]+\]|(?m)^\s*[^#;\r\n=]+(?=\s*=)"
+            : extension is ".bat" or ".cmd" or ".ps1"
+                ? @"(?im)^\s*(@?(echo|set|if|for|call|goto|exit|rem|param|function)\b[^\r\n]*)"
+                : extension is ".html" or ".htm" or ".xml" or ".svg"
+                    ? @"<[^>\r\n]+>"
+                    : @"(?m)^\s*(//|#|;|REM\b)[^\r\n]*";
+        foreach (Match match in Regex.Matches(visible, pattern))
+        {
+            var color = extension is ".ini" or ".cfg" or ".conf"
+                ? (match.Value.TrimStart().StartsWith("[", StringComparison.Ordinal) ? Color.DarkBlue : Color.DarkCyan)
+                : Color.ForestGreen;
+            ranges.Add((match.Index, match.Length, color));
+        }
+        return ranges;
+    }
+
+    void ApplySyntaxRanges(List<(int Start, int Length, Color Color)> ranges, int generation)
+    {
+        if (generation != _loadGeneration || IsDisposed || !_largeEditorOnly) return;
+        var selection = _text.SelectionStart;
+        var length = _text.SelectionLength;
+        _text.SuspendLayout();
+        try
+        {
+            foreach (var range in ranges)
+            {
+                if (range.Start >= _text.TextLength) continue;
+                _text.Select(range.Start, Math.Min(range.Length, _text.TextLength - range.Start));
+                _text.SelectionColor = range.Color;
+            }
+            _text.Select(Math.Min(selection, _text.TextLength), Math.Min(length, Math.Max(0, _text.TextLength - selection)));
+        }
+        finally { _text.ResumeLayout(); }
     }
 
     public static int GetLogicalLine(string text, int charIndex)
@@ -2996,14 +3468,31 @@ sealed class FileTab : Panel
 
     string BuildPreviewHtml()
     {
-        var html = MainForm.IsJson(Path) ? RenderJsonHtml(_text.Text) : RenderHtml(_text.Text);
+        var html = MainForm.IsJson(Path)
+            ? RenderJsonHtml(_text.Text)
+            : (string.IsNullOrEmpty(Path) || MainForm.IsMarkdownSource(Path)
+                ? RenderHtml(_text.Text)
+                : RenderTextHtml(_text.Text));
         var dir = string.IsNullOrEmpty(Path) ? Environment.CurrentDirectory : System.IO.Path.GetDirectoryName(Path)!;
         return RewriteLocalImages(html, dir);
+    }
+
+    void NavigatePdf(WebView2 web)
+    {
+        if (web.CoreWebView2 == null || string.IsNullOrEmpty(Path) || !File.Exists(Path)) return;
+        web.CoreWebView2.Navigate(new Uri(System.IO.Path.GetFullPath(Path)).AbsoluteUri);
     }
 
     public void RefreshPreview(bool forceReload = false)
     {
         if (!_ready) return;
+        if (IsBrowserDocument)
+        {
+            NavigatePdf(_web);
+            if (_splitMode != SplitMode.None) NavigatePdf(_web2);
+            return;
+        }
+        if (_largeEditorOnly) return;
         try
         {
             var html = BuildPreviewHtml();
@@ -3120,6 +3609,16 @@ sealed class FileTab : Panel
         return html;
     }
 
+    string RenderTextHtml(string src)
+    {
+        var extension = System.Net.WebUtility.HtmlEncode(System.IO.Path.GetExtension(Path).TrimStart('.').ToUpperInvariant());
+        var label = string.IsNullOrEmpty(extension) ? "TEXT" : extension + " · TEXT";
+        var encoded = System.Net.WebUtility.HtmlEncode(src);
+        return "<div class='plain-text-view'>" +
+            "<div class='plain-text-header'>" + label + " (원문 텍스트)</div>" +
+            "<pre class='plain-file'><code>" + encoded + "</code></pre></div>";
+    }
+
     string RenderHtml(string src)
     {
         var norm = NormalizeMd(src);
@@ -3159,6 +3658,23 @@ sealed class FileTab : Panel
 
     static string RenderJsonCodeBlocks(string html)
     {
+        // 요구사항: 표준 mermaid 코드 펜스는 다이어그램으로 렌더링하고, 실패하면 원문을 남긴다.
+        // Markdig AdvancedExtensions는 mermaid 펜스를 pre.mermaid로 출력한다.
+        html = Regex.Replace(
+            html,
+            @"<pre class=""mermaid""(?<preattr>[^>]*)>(?<content>[\s\S]*?)</pre>",
+            match => "<div class='mermaid-diagram'" + match.Groups["preattr"].Value +
+                "><pre class='mermaid-source'>" + match.Groups["content"].Value + "</pre></div>",
+            RegexOptions.IgnoreCase);
+        html = Regex.Replace(
+            html,
+            @"<pre(?<preattr>[^>]*)><code class=""language-mermaid""(?<attr>[^>]*)>(?<content>[\s\S]*?)</code></pre>",
+            match => "<div class='mermaid-diagram'" + match.Groups["preattr"].Value +
+                "><pre class='mermaid-source'>" + match.Groups["content"].Value + "</pre></div>",
+            RegexOptions.IgnoreCase);
+
+        // 요구사항: 외부 PlantUML/Graphviz/ZenUML/Kroki 연동은 지원하지 않는다.
+        // Mermaid 이외의 다이어그램 언어 펜스는 사용자가 원문을 확인할 수 있는 일반 코드 블록으로 유지한다.
         html = Regex.Replace(
             html,
             @"<pre(?<preattr>[^>]*)><code class=""language-json[c]?""(?<attr>[^>]*)>(?<content>[\s\S]*?)</code></pre>",
@@ -3431,6 +3947,9 @@ sealed class FileTab : Panel
          ".markdown-alert-title{margin:0 0 .25em;font-weight:700;color:#444;}" +
          ".footnotes{margin-top:2em;padding-top:1em;border-top:1px solid #d8d8dc;font-size:.9em;color:#555}.footnote-ref{font-weight:600}.footnote-backref{margin-left:.35em;}" +
          ".code-block-wrapper{margin:0.9em 0;background:#282c34;border-radius:8px;border:1px solid #3e4451;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.12);}" +
+         ".plain-text-view{margin:0.9em 0;background:transparent;}" +
+         ".plain-text-header{padding:6px 0;border-bottom:1px solid #d8d8dc;color:#555;font:600 12px Consolas,monospace;}" +
+         ".plain-file{margin:0;padding:12px 0;background:transparent;color:inherit;white-space:pre-wrap;word-break:break-word;font:13px/1.55 Consolas,'Cascadia Code','Fira Code',monospace;}" +
          ".code-header{display:flex;align-items:center;justify-content:space-between;padding:5px 12px;background:#21252b;border-bottom:1px solid #181a1f;font-family:Consolas,'Cascadia Code','Fira Code',monospace;font-size:12px;}" +
          ".code-lang{color:#abb2bf;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;}" +
          ".copy-code-btn{background:#3a3f4b;color:#abb2bf;border:1px solid #4b5263;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:500;cursor:pointer;transition:all .15s ease-in-out;outline:none;}" +
@@ -3450,6 +3969,10 @@ sealed class FileTab : Panel
          ".json-error-badge{background:#e06c75;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold;margin-left:8px;margin-right:auto;}" +
          ".json-error-msg{padding:8px 14px;background:rgba(224,108,117,0.15);border-bottom:1px solid rgba(224,108,117,0.3);color:#ff7b86;font-size:12px;font-family:Consolas,'Cascadia Code',monospace;}" +
          ".json-invalid{opacity:0.9;}" +
+         ".mermaid-diagram{margin:1em 0;overflow-x:auto;text-align:center;}" +
+         ".mermaid-diagram svg{max-width:100%;height:auto;}" +
+         ".mermaid-source{margin:0;padding:12px;text-align:left;white-space:pre-wrap;overflow-x:auto;background:#282c34;color:#abb2bf;}" +
+         ".mermaid-error{padding:8px 12px;color:#b42318;text-align:left;}" +
          "html:has(meta[name='word-export']) body.multi-col{overflow-x:hidden !important;overflow-y:auto !important;height:auto !important;width:100% !important;}" +
          "html:has(meta[name='word-export']) body.multi-col .md{max-width:46rem !important;width:100% !important;height:auto !important;margin:0 auto !important;column-count:1 !important;column-width:auto !important;overflow:visible !important;}" +
          "body.multi-col:not(.md-edit-position){margin:0 !important;padding:0 !important;width:100vw !important;height:100vh !important;overflow:hidden !important;}" +
@@ -3457,7 +3980,7 @@ sealed class FileTab : Panel
          "body.col-2:not(.md-edit-position) .md{column-count:2 !important;}" +
          "body.col-3:not(.md-edit-position) .md{column-count:3 !important;}" +
          "body.col-auto:not(.md-edit-position) .md{column-width:400px !important;}" +
-         "body.multi-col:not(.md-edit-position) pre,body.multi-col:not(.md-edit-position) table,body.multi-col:not(.md-edit-position) figure,body.multi-col:not(.md-edit-position) img,body.multi-col:not(.md-edit-position) blockquote,body.multi-col:not(.md-edit-position) .code-block-wrapper,body.multi-col:not(.md-edit-position) .markdown-alert,body.multi-col:not(.md-edit-position) .katex-display{break-inside:avoid !important;page-break-inside:avoid !important;}" +
+         "body.multi-col:not(.md-edit-position) pre,body.multi-col:not(.md-edit-position) table,body.multi-col:not(.md-edit-position) figure,body.multi-col:not(.md-edit-position) img,body.multi-col:not(.md-edit-position) blockquote,body.multi-col:not(.md-edit-position) .code-block-wrapper,body.multi-col:not(.md-edit-position) .markdown-alert,body.multi-col:not(.md-edit-position) .katex-display,body.multi-col:not(.md-edit-position) .mermaid-diagram{break-inside:avoid !important;page-break-inside:avoid !important;}" +
          "body.multi-col:not(.md-edit-position) img{max-height:calc(100vh - 120px) !important;max-width:100% !important;object-fit:contain !important;}" +
          "body.multi-col:not(.md-edit-position) h1,body.multi-col:not(.md-edit-position) h2,body.multi-col:not(.md-edit-position) h3{break-after:avoid !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar{height:8px !important;}" +
@@ -3468,8 +3991,44 @@ sealed class FileTab : Panel
         body + "</article>" + ScrollScript + "</body></html>";
     }
 
+    // 요구사항: Mermaid 오류 SVG가 문서 끝에 남지 않도록 렌더링 임시 요소를 제거한다.
     const string ScrollScript =
-        "<script>let __lastKeywords=[];let __cursorTarget=null;" +
+        "<script>let __lastKeywords=[];let __cursorTarget=null;let __mermaidLoader=null;let __mermaidId=0;" +
+        "function loadMermaid(){" +
+        "if(typeof window.mermaid?.render==='function')return Promise.resolve(window.mermaid);" +
+        "if(!__mermaidLoader)__mermaidLoader=new Promise((resolve,reject)=>{" +
+        "const script=document.createElement('script');" +
+        "script.src='https://mdviewer.local/mermaid.min.js';" +
+        "script.onload=()=>{const engine=window.mermaid;" +
+        "if(typeof engine?.render!=='function'){reject(new Error('Mermaid render API unavailable'));return;}" +
+        "engine.initialize({startOnLoad:false,securityLevel:'strict',flowchart:{htmlLabels:false}});resolve(engine);};" +
+        "script.onerror=()=>reject(new Error('Mermaid load failed'));" +
+        "document.head.appendChild(script);});" +
+        "return __mermaidLoader;}" +
+        "function clearMermaidArtifacts(){" +
+        "document.querySelectorAll('body > div[id^=\"dmd-mermaid-\"]').forEach(el=>el.remove());" +
+        "}" +
+        "async function renderMermaid(){" +
+        "clearMermaidArtifacts();" +
+        "const blocks=[...document.querySelectorAll('.mermaid-diagram:not([data-mermaid-pending]):not([data-rendered])')];" +
+        "if(!blocks.length)return;" +
+        "blocks.forEach(b=>b.dataset.mermaidPending='true');" +
+        "let engine;try{engine=await loadMermaid();}catch(e){" +
+        "blocks.forEach(b=>{if(b.isConnected){b.removeAttribute('data-mermaid-pending');" +
+        "const msg=document.createElement('div');msg.className='mermaid-error';" +
+        "msg.textContent='Mermaid 라이브러리를 불러올 수 없습니다.';b.prepend(msg);b.dataset.rendered='error';}});return;}" +
+        "for(const block of blocks){" +
+        "if(!block.isConnected)continue;" +
+        "const source=block.querySelector('.mermaid-source');if(!source)continue;" +
+        "const renderId='md-mermaid-'+(++__mermaidId);" +
+        "try{const result=await engine.render(renderId,source.textContent);" +
+        "if(!block.isConnected)continue;" +
+        "block.innerHTML=result.svg;block.dataset.rendered='true';" +
+        "if(result.bindFunctions)result.bindFunctions(block);" +
+        "}catch(e){const msg=document.createElement('div');msg.className='mermaid-error';" +
+        "msg.textContent='Mermaid 문법을 확인하세요: '+e.message;block.prepend(msg);block.dataset.rendered='error';}" +
+        "finally{document.getElementById('d'+renderId)?.remove();block.removeAttribute('data-mermaid-pending');}" +
+        "}}" +
         "function setCopied(btn){" +
         "const orig=btn.innerText;" +
         "btn.innerText='Copied!';" +
@@ -3626,6 +4185,7 @@ sealed class FileTab : Panel
         "art.innerHTML=html;" +
         "wireTaskCheckboxes();" +
         "renderMath();" +
+        "renderMermaid();" +
         "if(Array.isArray(__lastKeywords)&&__lastKeywords.length>0){applyHighlightKeywords(__lastKeywords);}" +
         "if(cursorLine&&cursorLine>0){scrollToCursorLine(cursorLine,totalLines);}" +
         "else{clearCursorHighlight();window.scrollTo(0,prevY);}" +
@@ -3765,6 +4325,7 @@ sealed class FileTab : Panel
         "}}" +
         "wireTaskCheckboxes();" +
         "document.addEventListener('DOMContentLoaded',renderMath);" +
+        "document.addEventListener('DOMContentLoaded',renderMermaid);" +
         "window.addEventListener('load',renderMath);" +
         "setTimeout(renderMath,50);" +
         "setTimeout(renderMath,250);" +
@@ -4073,6 +4634,17 @@ static class Brand
         {
             AssetDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "MDviewer");
             Directory.CreateDirectory(AssetDir);
+            try
+            {
+                using var mermaid = OpenRes("mermaid.min.js");
+                if (mermaid != null)
+                {
+                    var scriptPath = System.IO.Path.Combine(AssetDir, "mermaid.min.js");
+                    using var output = new FileStream(scriptPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+                    mermaid.CopyTo(output);
+                }
+            }
+            catch { }
             using var s = OpenRes("SOGANG_UNIVERSITY_for_windows.ttf");
             if (s != null)
             {

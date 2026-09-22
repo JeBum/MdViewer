@@ -10,6 +10,14 @@ https://github.com/JeBum/MDviewer
 
 MDviewer는 Windows에서 Markdown 문서를 편집하고, 실시간으로 보기 좋게 렌더링하며, Word 문서로 내보낼 수 있는 가벼운 데스크톱 앱입니다.
 
+별도 웹 뷰어는 [web/README.md](web/README.md)에 설치·실행 방법이 있습니다. 외부 서버 연동은 사용하지 않습니다. Windows 앱은 Mermaid만 내장 렌더링하고 PlantUML·Graphviz/DOT·ZenUML·Kroki는 일반 코드 블록으로 표시하며, 웹 뷰어는 Mermaid와 Graphviz/DOT을 내장 렌더링합니다.
+
+HTML/HTM, INI/CFG/CONF, BAT/CMD, LOG, XML, CSS, JS/TS, C/C++/C#/Java, Python, Shell, YAML/TOML 등 텍스트 파일을 열 수 있습니다. 전용 Markdown/JSON 처리가 없는 파일은 HTML을 실행하지 않고 안전한 TEXT 원문으로 표시합니다.
+
+PDF 파일은 WebView2의 내장 PDF 뷰어로 열어 읽을 수 있습니다. PNG/JPEG/GIF/WebP/BMP 이미지와 MP3/WAV/OGG/MP4/WebM 미디어도 브라우저 표시 방식으로 열립니다. 원본 보호를 위해 이 파일들은 편집 모드와 저장을 지원하지 않으며, 편집 모드 선택 시 읽기 전용 안내가 표시됩니다.
+
+100MB를 초과하는 파일을 열면 최신 50MB만 읽기, 처음부터 약 1MB씩 분할 로드, 전체 로드 중 하나를 선택할 수 있습니다. 최신 50MB 모드는 EOF에서 `Seek`하여 읽으므로 전체 파일을 스캔하지 않으며, 부분 로드 상태에서는 실수로 원본 전체를 덮어쓰지 않도록 저장을 막습니다.
+
 - 편집기와 미리보기를 세로·가로로 분할하고 1~3단으로 읽기
 - 표, 수식, 이미지, 링크, 체크박스를 포함한 Markdown 문서 렌더링
 - 검색, 선택 단어 강조, 테마 변경, `.md` 파일 드래그 앤 드롭
@@ -39,6 +47,8 @@ build.bat
 
 결과: `publish\MDviewer.exe`
 
+`release.bat`은 실행 중인 `publish\MDviewer.exe`를 교체할 수 없으면 기존 앱을 유지하고 새 실행 파일을 `publish_next\MDviewer.exe`에 생성합니다.
+
 설치본:
 
 ```bat
@@ -59,7 +69,9 @@ make_setup.bat
 
 ## 샘플 문서
 
-홈 화면의 **test-sample.md 열기**를 클릭하면 실행 파일과 같은 폴더에 샘플 파일을 생성하고 VIEW로 엽니다. 파일이 이미 있으면 내용과 수정 시각을 그대로 유지한 채 해당 파일을 엽니다. 샘플은 실행 파일에 내장되어 별도로 다운로드할 필요가 없습니다.
+홈 화면 왼쪽의 **test-sample.md 열기** 또는 **diagram-sample.md 열기**를 클릭하면 실행 파일과 같은 폴더에 해당 샘플 파일을 생성하고 VIEW로 엽니다. 파일이 이미 있으면 내용과 수정 시각을 그대로 유지한 채 해당 파일을 엽니다. 두 샘플은 실행 파일에 내장되어 별도로 다운로드할 필요가 없습니다. 홈 화면 링크는 왼쪽에 두 샘플 파일, 오른쪽 위에 MD 파일 연결, 오른쪽 아래에 GitHub 저장소를 배치합니다.
+
+홈 화면에는 포함된 구성요소의 라이선스도 표시합니다. Mermaid.js·KaTeX·Open XML SDK는 MIT, Markdig는 BSD-2-Clause, WebView2는 Microsoft 배포 라이선스를 사용합니다.
 
 홈 화면의 **GitHub 저장소**를 클릭하면 프로젝트 저장소를 기본 웹 브라우저로 엽니다.
 

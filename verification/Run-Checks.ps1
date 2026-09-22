@@ -18,6 +18,7 @@ New-Item -ItemType Directory -Force -Path $runnerDir | Out-Null
     <AssemblyMetadata Include="BuildDate" Value="verification" />
     <EmbeddedResource Include="../../assets/*" />
     <EmbeddedResource Include="../../test-sample.md" LogicalName="MDviewer.test-sample.md" />
+    <EmbeddedResource Include="../../diagram-sample.md" LogicalName="MDviewer.diagram-sample.md" />
     <Compile Include="../../Program.cs" />
     <Compile Include="../../WordExport.cs" />
     <Compile Include="../../verification/Checks.cs.txt" />

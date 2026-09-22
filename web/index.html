@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MDviewer Diagrams</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar">
+        <div class="brand"><span class="brand-mark">M</span><div><strong>MDviewer</strong><small>Diagram studio</small></div></div>
+        <div class="toolbar-actions">
+          <label class="button file-button" for="open-file">파일 열기</label>
+          <input id="open-file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" />
+          <button id="load-sample" type="button">샘플 불러오기</button>
+          <button id="theme-toggle" type="button" aria-label="다크 모드 전환">다크 모드</button>
+          <button id="print" type="button">인쇄 / PDF</button>
+        </div>
+      </header>
+      <main class="workspace">
+        <section class="pane editor-pane" aria-label="Markdown 편집기">
+          <div class="pane-header"><span>MARKDOWN</span><span id="source-name">새 문서</span></div>
+          <textarea id="editor" spellcheck="false" aria-label="Markdown 원문"></textarea>
+        </section>
+        <section class="pane preview-pane" aria-label="실시간 미리보기">
+          <div class="pane-header"><span>PREVIEW</span><span id="render-status" role="status">준비됨</span></div>
+          <article id="preview" class="markdown-body"></article>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
