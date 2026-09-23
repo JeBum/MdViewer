@@ -3,7 +3,7 @@
 // [MDviewer 개발 및 유지보수 필수 작업 규칙 (Development Workflow Rules)]
 // 1. 사용자 요구사항(기능 추가/수정) 발생 시 소스 코드(Program.cs 등)에 요건 및 주석 명확히 반영
 // 2. 테스트 케이스는 verification/TEST-CASES.md 및 verification/Checks.cs.txt에 기록. test-sample.md는 사용자의 MD 형식 샘플이므로 수정하지 않음
-// 3. 작업 완료 후 항상 build.bat을 실행하여 단일 실행 파일(publish\MDviewer.exe) 빌드 및 검증 완료
+// 3. 작업 완료 후 항상 release.bat을 실행하여 단일 실행 파일(publish\MDviewer.exe) 빌드 및 검증 완료
 // 4. 변경 이력은 History.md에 일자별로 상세 기록 유지
 // ==============================================================================================
 
@@ -1511,8 +1511,11 @@ sealed class FileTab : Panel
     double _zoomWeb = 1;
     double _zoomWeb2 = 1;
     readonly ZoomOsdLabel _osdEdit = new();
+    readonly EditorPreviewLineMarker _previewLineMarker = new();
+    readonly System.Windows.Forms.Timer _previewLineFadeTimer = new() { Interval = 25 };
     readonly System.Windows.Forms.Timer _osdEditTimer = new() { Interval = 1100 };
     bool _syncing;
+    DateTime _previewLineFadeStartedUtc;
     SplitMode _splitMode = SplitMode.None;
     bool _ready;
     bool _dirty;
@@ -1528,6 +1531,7 @@ sealed class FileTab : Panel
     bool _largeChunkEnded;
     bool _largeEditorOnly;
     int _loadGeneration;
+    int _previewLineCharIndex = -1;
 
     public string Path { get; private set; }
     public string Title => string.IsNullOrEmpty(Path) ? "제목 없음" : System.IO.Path.GetFileName(Path);
@@ -1571,6 +1575,7 @@ sealed class FileTab : Panel
         get => _editMode;
         set
         {
+            HidePreviewLineMarker();
             if (value && IsBrowserDocument)
             {
                 MessageBox.Show(FindForm(),
@@ -1814,18 +1819,40 @@ sealed class FileTab : Panel
         };
         _text.MouseUp += (_, _) =>
         {
-            if (_editMode && !_syncing) SyncCursorToWeb();
+            if (_editMode && !_syncing)
+            {
+                SyncCursorToWeb();
+                ShowPreviewLineMarker(_text.SelectionStart);
+            }
         };
+        _text.MouseDown += (_, _) => HidePreviewLineMarker();
         _text.VScroll += (_, _) =>
         {
             _gutter.Invalidate();
+            UpdatePreviewLineMarker();
             if (_editMode) SyncEditorToWeb();
             MaybeLoadNextLargeChunk();
         };
-        _text.HScroll += (_, _) => _gutter.Invalidate();
-        _text.ContentsResized += (_, _) => _gutter.Invalidate();
-        _text.Resize += (_, _) => _gutter.Invalidate();
-        _text.MouseWheel += (_, _) => _gutter.Invalidate();
+        _text.HScroll += (_, _) =>
+        {
+            _gutter.Invalidate();
+            UpdatePreviewLineMarker();
+        };
+        _text.ContentsResized += (_, _) =>
+        {
+            _gutter.Invalidate();
+            UpdatePreviewLineMarker();
+        };
+        _text.Resize += (_, _) =>
+        {
+            _gutter.Invalidate();
+            UpdatePreviewLineMarker();
+        };
+        _text.MouseWheel += (_, _) =>
+        {
+            _gutter.Invalidate();
+            UpdatePreviewLineMarker();
+        };
         _text.TextChanged += (_, _) =>
         {
             Dirty = _text.Text != _loaded;
@@ -1841,6 +1868,31 @@ sealed class FileTab : Panel
         _editPane.Controls.Add(_text);
         _editPane.Controls.Add(_gutter);
         _text.Controls.Add(_osdEdit);
+        _text.Controls.Add(_previewLineMarker);
+        _previewLineMarker.AccentColor = ColorTranslator.FromHtml(Brand.CursorActiveAccentHex);
+        _previewLineMarker.Visible = false;
+        _previewLineMarker.Enabled = false;
+        _previewLineMarker.BringToFront();
+        _previewLineFadeTimer.Tick += (_, _) =>
+        {
+            if (_previewLineCharIndex < 0)
+            {
+                _previewLineFadeTimer.Stop();
+                return;
+            }
+
+            var elapsed = (DateTime.UtcNow - _previewLineFadeStartedUtc).TotalMilliseconds;
+            const double fadeOutMs = 500;
+            if (elapsed < fadeOutMs)
+                _previewLineMarker.DisplayOpacity = (float)(1 - elapsed / fadeOutMs);
+            else
+            {
+                // 유지시간 없이 즉시 표시한 뒤 0.5초 동안 페이드아웃한다.
+                HidePreviewLineMarker();
+                return;
+            }
+            _previewLineMarker.Invalidate();
+        };
         _osdEdit.BringToFront();
         _text.Resize += (_, _) =>
         {
@@ -1965,6 +2017,8 @@ sealed class FileTab : Panel
         _text.ForeColor = Brand.Ink;
         _text.BackColor = Brand.Paper;
         _text.Font = Brand.Editor((float)(10.5 * _zoomEdit));
+        _previewLineMarker.AccentColor = ColorTranslator.FromHtml(Brand.CursorActiveAccentHex);
+        _previewLineMarker.Invalidate();
         Native.ApplyLineSpacing(_text, 1.4f);
         ApplyWebZoom(_web, _zoomWeb);
         ApplyWebZoom(_web2, _zoomWeb2);
@@ -2335,6 +2389,68 @@ sealed class FileTab : Panel
         catch { }
     }
 
+    // 마우스로 선택한 위치를 유지 없이 0.5초 동안 강조한다.
+    // 줄 번호와 같은 RichEdit 실제 줄 좌표를 사용한다.
+    void ShowPreviewLineMarker(int charIndex)
+    {
+        if (!_editMode || charIndex < 0 || charIndex > _text.TextLength) return;
+        _previewLineCharIndex = charIndex;
+        _previewLineMarker.AccentColor = ColorTranslator.FromHtml(Brand.CursorActiveAccentHex);
+        _previewLineMarker.DisplayOpacity = 1f;
+        UpdatePreviewLineMarker();
+        _previewLineMarker.BringToFront();
+        _previewLineFadeStartedUtc = DateTime.UtcNow;
+        _previewLineFadeTimer.Stop();
+        _previewLineFadeTimer.Start();
+    }
+
+    void HidePreviewLineMarker()
+    {
+        _previewLineFadeTimer.Stop();
+        _previewLineCharIndex = -1;
+        _previewLineMarker.DisplayOpacity = 0f;
+        _previewLineMarker.Visible = false;
+        _previewLineMarker.Bounds = Rectangle.Empty;
+    }
+
+    void UpdatePreviewLineMarker()
+    {
+        if (!_previewLineMarker.Visible && _previewLineCharIndex < 0) return;
+        if (!_editMode || _previewLineCharIndex < 0 || _previewLineCharIndex > _text.TextLength)
+        {
+            HidePreviewLineMarker();
+            return;
+        }
+
+        using var geometry = new EditorTextGeometry(_text);
+        // 글꼴 높이로 추정하지 않는다. 한글 대체 글꼴과 줄 간격이 반영된 실제 하단 사용.
+        if (!geometry.TryGet(_previewLineCharIndex, out _, out var bottom))
+        {
+            _previewLineMarker.Visible = false;
+            return;
+        }
+        var top = bottom - 2;
+        var visible = top >= 0 && top < _text.ClientSize.Height;
+        _previewLineMarker.SetBounds(
+            0,
+            Math.Max(0, top),
+            Math.Max(0, _text.ClientSize.Width),
+            3);
+        _previewLineMarker.Visible = visible;
+        if (visible) _previewLineMarker.Invalidate();
+    }
+
+    void PositionEditorLineForPreview(int charIndex)
+    {
+        if (!_text.IsHandleCreated || _text.ClientSize.Height <= 0) return;
+        var visualLine = _text.GetLineFromCharIndex(charIndex);
+        var lineHeight = Math.Max(1, _text.Font.Height + 4);
+        var visibleLines = Math.Max(1, _text.ClientSize.Height / lineHeight);
+        // VIEW의 scrollToCursorLine과 같은 35% 지점을 사용한다.
+        var topOffset = Math.Max(0, (int)Math.Round(visibleLines * 0.35));
+        Native.SetEditorFirstLine(_text, Math.Max(0, visualLine - topOffset));
+    }
+
     void MoveEditorToPreviewLine(int normLine)
     {
         if (!_editMode || _syncing) return;
@@ -2345,8 +2461,11 @@ sealed class FileTab : Panel
             // RichTextBox의 화면 줄 번호 대신 원문의 논리 줄 번호를 사용한다.
             var position = GetCharIndexOfLogicalLine(_text.Text, logicalLine);
             _text.Select(position, 0);
-            _text.ScrollToCaret();
             _text.Focus();
+            _text.ScrollToCaret();
+            PositionEditorLineForPreview(position);
+            // VIEW 클릭 위치를 편집기 화면에 명확히 표시한다.
+            ShowPreviewLineMarker(position);
             _gutter.Invalidate();
             // 사용자가 클릭한 VIEW는 다시 스크롤하지 않고 위치 마크만 갱신한다.
             if (_web.CoreWebView2 != null)
@@ -3035,6 +3154,8 @@ sealed class FileTab : Panel
     {
         _previewTick.Stop();
         _previewTick.Dispose();
+        _previewLineFadeTimer.Stop();
+        _previewLineFadeTimer.Dispose();
         CloseLargeReader();
         _watch.EnableRaisingEvents = false;
         _watch.Dispose();
@@ -3551,11 +3672,8 @@ sealed class FileTab : Panel
     static void PaintGutter(PaintEventArgs e, RichTextBox box, Panel gutter)
     {
         e.Graphics.Clear(gutter.BackColor);
-        if (box.TextLength == 0)
-        {
-            TextRenderer.DrawText(e.Graphics, "1", box.Font, new Point(8, 4), Color.Gray);
-            return;
-        }
+        using var geometry = new EditorTextGeometry(box);
+        var origin = gutter.PointToClient(box.PointToScreen(Point.Empty));
         int firstChar = box.GetCharIndexFromPosition(Point.Empty);
         int firstLine = box.GetLineFromCharIndex(firstChar);
         int lastChar = box.GetCharIndexFromPosition(new Point(0, box.ClientSize.Height));
@@ -3572,11 +3690,15 @@ sealed class FileTab : Panel
             {
                 lastLogical = logical;
                 var label = (logical + 1).ToString();
-                var size = TextRenderer.MeasureText(label, box.Font);
-                TextRenderer.DrawText(
-                    e.Graphics, label, box.Font,
-                    new Point(gutter.Width - size.Width - 6, pt.Y),
-                    Color.FromArgb(150, 150, 150), TextFormatFlags.NoPadding);
+                // EM_POSFROMCHAR는 줄 상단이며 글자 기준선이 아니다.
+                // 한글/영문 혼용 시에도 RichEdit 기준선에 숫자의 기준선을 직접 정렬한다.
+                if (geometry.TryGet(index, out var baseline, out _))
+                    Native.DrawBaselineText(e.Graphics, label, box.Font,
+                        gutter.Width - 6, origin.Y + baseline, Color.FromArgb(150, 150, 150));
+                else
+                    TextRenderer.DrawText(e.Graphics, label, box.Font,
+                        new Rectangle(0, origin.Y + pt.Y, gutter.Width - 6, box.Font.Height),
+                        Color.Gray, TextFormatFlags.Right | TextFormatFlags.NoPadding);
             }
         }
         e.Graphics.DrawLine(Pens.Gainsboro, gutter.Width - 1, 0, gutter.Width - 1, gutter.Height);
@@ -3987,13 +4109,13 @@ sealed class FileTab : Panel
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-track{background:transparent !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.35) !important;border-radius:4px !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,0.6) !important;}" +
-         $"</style></head><body class='{colClass}'><article class='md'>" +
+          $"</style></head><body class='{colClass}' style='--md-cursor-accent:{Brand.CursorActiveAccentHex}'><article class='md'>" +
         body + "</article>" + ScrollScript + "</body></html>";
     }
 
     // 요구사항: Mermaid 오류 SVG가 문서 끝에 남지 않도록 렌더링 임시 요소를 제거한다.
     const string ScrollScript =
-        "<script>let __lastKeywords=[];let __cursorTarget=null;let __mermaidLoader=null;let __mermaidId=0;" +
+         "<script>let __lastKeywords=[];let __cursorTarget=null;let __mermaidLoader=null;let __mermaidId=0;let __cursorLineFadeFrame=0;let __cursorLineFadeStarted=0;let __cursorLineOpacity=0;" +
         "function loadMermaid(){" +
         "if(typeof window.mermaid?.render==='function')return Promise.resolve(window.mermaid);" +
         "if(!__mermaidLoader)__mermaidLoader=new Promise((resolve,reject)=>{" +
@@ -4104,14 +4226,34 @@ sealed class FileTab : Panel
         "const ratio=Math.max(0,Math.min(1,(n-prevLn)/(nextLn-prevLn)));" +
         "return prevY+ratio*(nextY-prevY);" +
         "}" +
-        "function clearCursorHighlight(){" +
-        "  __cursorTarget=null;" +
-        "  const marker=document.getElementById('md-cursor-indicator');" +
-        "  if(marker)marker.hidden=true;" +
-        "  const rail=document.getElementById('md-position-rail');if(rail)rail.hidden=true;" +
-        "  document.body.classList.remove('md-edit-position');" +
-        "}" +
-        "function updateCursorIndicator(){" +
+         "function clearCursorHighlight(){" +
+         "  __cursorTarget=null;" +
+         "  if(__cursorLineFadeFrame)cancelAnimationFrame(__cursorLineFadeFrame);__cursorLineFadeFrame=0;__cursorLineOpacity=0;" +
+         "  const marker=document.getElementById('md-cursor-indicator');" +
+         "  if(marker)marker.hidden=true;" +
+         "  const line=document.getElementById('md-cursor-line-indicator');if(line)line.hidden=true;" +
+         "  const rail=document.getElementById('md-position-rail');if(rail)rail.hidden=true;" +
+         "  document.body.classList.remove('md-edit-position');" +
+         "}" +
+         "function cursorLineElement(){" +
+         "  let line=document.getElementById('md-cursor-line-indicator');" +
+         "  if(!line){line=document.createElement('div');line.id='md-cursor-line-indicator';line.setAttribute('aria-hidden','true');line.style.cssText='position:fixed;z-index:999998;height:2px;background:var(--md-cursor-accent,#b3292e);box-shadow:0 1px 3px rgba(0,0,0,.28);pointer-events:none;display:block;';document.body.appendChild(line);}" +
+         "  return line;" +
+         "}" +
+         "function updateCursorLineIndicator(){" +
+         "  const line=document.getElementById('md-cursor-line-indicator');if(!line)return;" +
+         "  if(!__cursorTarget||!__cursorTarget.isConnected||__cursorLineOpacity<=0){line.hidden=true;return;}" +
+          "  const rect=__cursorTarget.getBoundingClientRect();const zoom=parseFloat(getComputedStyle(document.documentElement).zoom)||1;const style=getComputedStyle(__cursorTarget);" +
+          "  const fontSize=(parseFloat(style.fontSize)||14)*zoom;" +
+          "  const y=rect.top+Math.min(rect.height,fontSize+2);const left=Math.max(0,rect.left);const right=Math.min(window.innerWidth,rect.right);" +
+         "  line.hidden=rect.height<=0||y<0||y>window.innerHeight||right<=left;line.style.left=(left/zoom)+'px';line.style.top=(y/zoom)+'px';line.style.width=(Math.max(1,right-left)/zoom)+'px';line.style.opacity=String(__cursorLineOpacity);" +
+         "}" +
+         "function startCursorLineFade(){" +
+         "  if(__cursorLineFadeFrame)cancelAnimationFrame(__cursorLineFadeFrame);__cursorLineFadeStarted=performance.now();__cursorLineOpacity=1;updateCursorLineIndicator();" +
+         "  const tick=now=>{const elapsed=now-__cursorLineFadeStarted;if(elapsed<500)__cursorLineOpacity=1-(elapsed/500);else{__cursorLineOpacity=0;__cursorLineFadeFrame=0;updateCursorLineIndicator();return;}updateCursorLineIndicator();__cursorLineFadeFrame=requestAnimationFrame(tick);};" +
+         "  __cursorLineFadeFrame=requestAnimationFrame(tick);" +
+         "}" +
+         "function updateCursorIndicator(){" +
         "  const marker=document.getElementById('md-cursor-indicator');" +
         "  if(!marker)return;" +
         "  if(!__cursorTarget||!__cursorTarget.isConnected){marker.hidden=true;return;}" +
@@ -4124,10 +4266,11 @@ sealed class FileTab : Panel
         "  const rail=document.getElementById('md-position-rail');" +
         "  rail.style.width=(24/zoom)+'px';" +
         "  document.body.style.setProperty('--md-position-width',(24/zoom)+'px');" +
-        "  marker.style.left=(8/zoom)+'px';" +
-        "  marker.style.width=(8/zoom)+'px';" +
-        "  marker.style.height=(12/zoom)+'px';" +
-        "}" +
+         "  marker.style.left=(8/zoom)+'px';" +
+         "  marker.style.width=(8/zoom)+'px';" +
+         "  marker.style.height=(12/zoom)+'px';" +
+         "  updateCursorLineIndicator();" +
+         "}" +
         "function highlightCursorLine(n,totalLines){" +
         "  n=parseInt(n,10)||1;" +
         "  const all=nodes();" +
@@ -4146,10 +4289,11 @@ sealed class FileTab : Panel
         "  if(!marker){" +
         "    marker=document.createElement('div');" +
         "    marker.id='md-cursor-indicator';" +
-        "    marker.setAttribute('aria-hidden','true');" +
-        "    rail.appendChild(marker);" +
-        "  }" +
-        "  updateCursorIndicator();" +
+         "    marker.setAttribute('aria-hidden','true');" +
+         "    rail.appendChild(marker);" +
+         "  }" +
+         "  cursorLineElement();startCursorLineFade();" +
+         "  updateCursorIndicator();" +
         "}" +
         "window.addEventListener('resize',updateCursorIndicator);" +
         "window.addEventListener('load',updateCursorIndicator,true);" +
@@ -4788,6 +4932,49 @@ static class Brand
 
 static class Native
 {
+    [DllImport("gdi32.dll")] static extern int SaveDC(IntPtr dc);
+    [DllImport("gdi32.dll")] static extern bool RestoreDC(IntPtr dc, int saved);
+    [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] static extern uint SetTextAlign(IntPtr dc, uint align);
+    [DllImport("gdi32.dll")] static extern int SetBkMode(IntPtr dc, int mode);
+    [DllImport("gdi32.dll")] static extern uint SetTextColor(IntPtr dc, int color);
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+    static extern bool TextOut(IntPtr dc, int x, int y, string text, int count);
+    [DllImport("gdi32.dll")] static extern bool SetViewportOrgEx(IntPtr dc, int x, int y, IntPtr old);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    static extern IntPtr SendMessagePointer(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
+
+    public static void DrawBaselineText(Graphics graphics, string text, Font font, int x, int baseline, Color color)
+    {
+        var hfont = font.ToHfont();
+        var dc = graphics.GetHdc();
+        var saved = SaveDC(dc);
+        try
+        {
+            SelectObject(dc, hfont);
+            SetTextAlign(dc, 2 | 24); // TA_RIGHT | TA_BASELINE
+            SetBkMode(dc, 1);
+            SetTextColor(dc, ColorTranslator.ToWin32(color));
+            TextOut(dc, x, baseline, text, text.Length);
+        }
+        finally { RestoreDC(dc, saved); graphics.ReleaseHdc(dc); DeleteObject(hfont); }
+    }
+
+    public static void PaintEditorUnderlay(Graphics graphics, Control marker)
+    {
+        if (marker.Parent is not RichTextBox box || !box.IsHandleCreated) return;
+        var dc = graphics.GetHdc();
+        var saved = SaveDC(dc);
+        try
+        {
+            SetViewportOrgEx(dc, -marker.Left, -marker.Top, IntPtr.Zero);
+            // WinForms의 가짜 투명 배경 대신 RichEdit 원문을 먼저 그려 글자 삭제를 방지한다.
+            SendMessagePointer(box.Handle, 0x0318, dc, (IntPtr)4); // WM_PRINTCLIENT, PRF_CLIENT
+        }
+        finally { RestoreDC(dc, saved); graphics.ReleaseHdc(dc); }
+    }
+
     public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -4905,6 +5092,87 @@ static class Native
         fmt.bLineSpacingRule = 5;
         fmt.dyLineSpacing = (int)Math.Round(multiple * 20);
         SendMessagePara(box.Handle, EM_SETPARAFORMAT, (IntPtr)SCF_ALL, ref fmt);
+    }
+}
+
+// RichEdit의 실제 기준선을 조회한다. 선택 영역/커서를 변경하지 않는다.
+sealed class EditorTextGeometry : IDisposable
+{
+    object? document;
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    static extern IntPtr GetOleInterface(IntPtr hwnd, int msg, IntPtr wParam, out IntPtr value);
+
+    public EditorTextGeometry(RichTextBox box)
+    {
+        if (!box.IsHandleCreated) return;
+        GetOleInterface(box.Handle, 0x043C, IntPtr.Zero, out var ole);
+        if (ole == IntPtr.Zero) return;
+        try
+        {
+            var iid = new Guid("8CC497C0-A1DF-11CE-8098-00AA0047BE5D");
+            if (Marshal.QueryInterface(ole, ref iid, out var doc) != 0) return;
+            try { document = Marshal.GetObjectForIUnknown(doc); }
+            finally { Marshal.Release(doc); }
+        }
+        finally { Marshal.Release(ole); }
+    }
+
+    public bool TryGet(int index, out int baseline, out int bottom)
+    {
+        baseline = bottom = 0;
+        if (document == null) return false;
+        object? range = null;
+        try
+        {
+            range = ((dynamic)document).Range(index, index);
+            int x;
+            // tomStart | tomClientCoord | tomAllowOffClient + TA_BASELINE/TA_BOTTOM.
+            ((dynamic)range).GetPoint(32 | 256 | 512 | 24, out x, out baseline);
+            ((dynamic)range).GetPoint(32 | 256 | 512 | 8, out x, out bottom);
+            return bottom >= baseline;
+        }
+        catch (COMException) { return false; }
+        finally { if (range != null && Marshal.IsComObject(range)) Marshal.ReleaseComObject(range); }
+    }
+
+    public void Dispose()
+    {
+        if (document != null) Marshal.ReleaseComObject(document);
+        document = null;
+    }
+}
+
+sealed class EditorPreviewLineMarker : Control
+{
+    public Color AccentColor { get; set; } = Color.FromArgb(179, 41, 46);
+    public float DisplayOpacity { get; set; } = 1f;
+
+    public EditorPreviewLineMarker()
+    {
+        SetStyle(ControlStyles.SupportsTransparentBackColor |
+                 ControlStyles.UserPaint |
+                 ControlStyles.AllPaintingInWmPaint |
+                 ControlStyles.OptimizedDoubleBuffer, true);
+        BackColor = Color.Transparent;
+        Height = 3;
+        TabStop = false;
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        Native.PaintEditorUnderlay(e.Graphics, this);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        if (Width <= 0 || Height <= 0) return;
+        if (DisplayOpacity <= 0f) return;
+        var opacity = Math.Clamp(DisplayOpacity, 0f, 1f);
+        using var underline = new SolidBrush(Color.FromArgb((int)Math.Round(255 * opacity), AccentColor));
+        using var shadow = new SolidBrush(Color.FromArgb((int)Math.Round(70 * opacity), AccentColor));
+        e.Graphics.FillRectangle(underline, 0, 0, Width, 2);
+        e.Graphics.FillRectangle(shadow, 0, 2, Width, 1);
     }
 }
 

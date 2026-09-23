@@ -333,6 +333,18 @@ internal static class Checks
             await JS("(clearCursorHighlight(),true)");
             Require((await JS("document.getElementById('md-position-rail').hidden && !document.body.classList.contains('md-edit-position')")).GetBoolean(), "Rail remains after leaving edit position");
         });
+        await TestAsync("CURSOR-10", "Editor cursor shows a thin VIEW underline beside the triangle", async () =>
+        {
+            await Page(doc); await JS("(scrollToCursorLine(5,7),true)");
+            await Wait(async () => (await JS("(()=>{const e=document.getElementById('md-cursor-line-indicator');return !!e&&!e.hidden;})()")).GetBoolean());
+            var r = await JS("(()=>{const e=document.getElementById('md-cursor-line-indicator'),s=getComputedStyle(e),b=e.getBoundingClientRect();return {height:b.height,opacity:parseFloat(s.opacity),color:s.backgroundColor};})()");
+            Require(r.GetProperty("height").GetDouble()<=2.5 && r.GetProperty("opacity").GetDouble()>0 && r.GetProperty("color").GetString()!="rgba(0, 0, 0, 0)", r.ToString());
+            await Task.Delay(150);
+            var fadingOpacity=(await JS("parseFloat(getComputedStyle(document.getElementById('md-cursor-line-indicator')).opacity)")).GetDouble();
+            Require(fadingOpacity>0 && fadingOpacity<1, $"VIEW underline did not start fading immediately: opacity={fadingOpacity}");
+            await Task.Delay(450);
+            Require((await JS("document.getElementById('md-cursor-line-indicator').hidden")).GetBoolean(), "VIEW underline did not disappear after the 0.5 second fade-out");
+        });
         await TestAsync("THEME-01", "Blue Sky uses the new light-blue native and preview backgrounds", async () =>
         {
             Brand.Theme=AppTheme.BlueSky; Tab.ApplyChrome(); await Page(doc);
@@ -922,8 +934,139 @@ internal static class Checks
             await Task.CompletedTask;
         });
     }
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint="SendMessageW")]
+    static extern IntPtr PrintClient(IntPtr hwnd,int msg,IntPtr dc,IntPtr flags);
+    static Bitmap CaptureEditorClient(Control control)
+    {
+        var bitmap=new Bitmap(control.ClientSize.Width,control.ClientSize.Height);
+        using var graphics=Graphics.FromImage(bitmap);
+        graphics.Clear(control.BackColor);
+        var dc=graphics.GetHdc();
+        try { PrintClient(control.Handle,0x0317,dc,(IntPtr)(4|8|16)); }
+        finally { graphics.ReleaseHdc(dc); }
+        return bitmap;
+    }
     static async Task RunEditorIsolation()
     {
+        await TestAsync("GEOMETRY-01", "Native text baseline includes mixed Korean line metrics", async () =>
+        {
+            Tab.EditMode=true; Tab.Split=SplitMode.Vertical;
+            Text("123 ASCII\n## 4. GitHub 스타일 콜아웃\n\n> [!NOTE] 알림\ngyp 밑부분");
+            Editor.Select(0,0); Editor.ScrollToCaret(); await Task.Delay(100);
+            using var geometry=new EditorTextGeometry(Editor);
+            for(int i=0;i<Editor.Lines.Length;i++)
+            {
+                var index=Editor.GetFirstCharIndexFromLine(i);
+                Require(geometry.TryGet(index,out var baseline,out var bottom),"Native text geometry unavailable");
+                Require(bottom>=baseline,"Invalid text bottom");
+            }
+        });
+        await TestAsync("GEOMETRY-02", "Gutter glyphs align with actual text and underline preserves text pixels", async () =>
+        {
+            var originalFont=Editor.Font;
+            try
+            {
+                foreach(var size in new[]{10.5f,14f,18f})
+                {
+                    using var font=Brand.Editor(size);
+                    Editor.Font=font;
+                    Text("1 ASCII gyp\n2 ## 4. GitHub 스타일 콜아웃\n3\n4 > [!NOTE] 알림\n5 gyp 밑부분\n6 마지막 줄");
+                    Native.ApplyLineSpacing(Editor,1.4f);
+                    Editor.Select(0,0); Editor.ScrollToCaret();
+                    await Task.Delay(100);
+                    Call("HidePreviewLineMarker");
+                    var gutter=Field<Panel>("_gutter");
+                    using var body=CaptureEditorClient(Editor);
+                    using var numbers=new Bitmap(gutter.Width,gutter.Height);
+                    gutter.DrawToBitmap(numbers,new Rectangle(Point.Empty,numbers.Size));
+                    using var geometry=new EditorTextGeometry(Editor);
+                    for(int line=0;line<6;line++)
+                    {
+                        var index=Editor.GetFirstCharIndexFromLine(line);
+                        var point=Editor.GetPositionFromCharIndex(index);
+                        Require(geometry.TryGet(index,out var baseline,out var bottom),"Missing line metrics");
+                        (int top,int bottom) Ink(Bitmap bitmap,int left,int right)
+                        {
+                            var ys=new List<int>();
+                            for(int y=Math.Max(0,point.Y);y<Math.Min(bottom,bitmap.Height);y++)
+                                for(int x=left;x<right;x++)
+                                {
+                                    var c=bitmap.GetPixel(x,y);
+                                    if(Math.Abs(c.R-c.G)<10 && Math.Abs(c.G-c.B)<10 && c.R<195){ys.Add(y);break;}
+                                }
+                            Require(ys.Count>0,$"No glyph pixels: size={size}, line={line}");
+                            return (ys.Min(),ys.Max());
+                        }
+                        var digitWidth=TextRenderer.MeasureText("0",font,Size.Empty,TextFormatFlags.NoPadding).Width;
+                        var textInk=Ink(body,point.X,point.X+digitWidth-1);
+                        var numberInk=Ink(numbers,Math.Max(0,gutter.Width-6-digitWidth),gutter.Width-6);
+                        Require(Math.Abs(textInk.top-numberInk.top)<=1 && Math.Abs(textInk.bottom-numberInk.bottom)<=1,
+                            $"Gutter mismatch: font={size}, line={line}, text={textInk}, number={numberInk}, baseline={baseline}");
+                    }
+                    Call("ShowPreviewLineMarker",Editor.GetFirstCharIndexFromLine(1));
+                    Field<System.Windows.Forms.Timer>("_previewLineFadeTimer").Stop();
+                    using var highlighted=CaptureEditorClient(Editor);
+                    for(int y=0;y<body.Height;y++)
+                        for(int x=4;x<body.Width;x++)
+                        {
+                            var before=body.GetPixel(x,y);
+                            if(before.R<100 && before.G<100 && before.B<100)
+                            {
+                                var after=highlighted.GetPixel(x,y);
+                                Require(after.R<130 && after.G<130 && after.B<130,$"Underline covers glyph at {x},{y} (font {size})");
+                            }
+                        }
+                    using var combined=new Bitmap(gutter.Width+body.Width,Math.Min(270,body.Height));
+                    using(var graphics=Graphics.FromImage(combined))
+                    {
+                        graphics.DrawImageUnscaled(numbers,0,0);
+                        graphics.DrawImageUnscaled(highlighted,gutter.Width,0);
+                    }
+                    combined.Save(Path.Combine(Artifacts,$"line-geometry-{size}.png"));
+                    Call("HidePreviewLineMarker");
+                }
+            }
+            finally { Editor.Font=originalFont; Native.ApplyLineSpacing(Editor,1.4f); Call("HidePreviewLineMarker"); }
+        });
+        await TestAsync("GEOMETRY-03", "Empty, wrapped and scrolled text retain source position and native geometry", async () =>
+        {
+            Text("");
+            using(var geometry=new EditorTextGeometry(Editor))
+                Require(geometry.TryGet(0,out var baseline,out var bottom) && bottom>baseline,"Empty line geometry missing");
+            var gutter=Field<Panel>("_gutter");
+            using(var numbers=new Bitmap(gutter.Width,gutter.Height))
+            {
+                gutter.DrawToBitmap(numbers,new Rectangle(Point.Empty,numbers.Size));
+                bool found=false;
+                for(int y=0;y<50;y++) for(int x=0;x<gutter.Width-2;x++)
+                    if(numbers.GetPixel(x,y).R<190) found=true;
+                Require(found,"Empty editor lost line number 1");
+            }
+            Text(string.Join("\n",Enumerable.Range(1,80).Select(i=>$"{i} "+string.Join(" ",Enumerable.Repeat("한글 English gyp",12)))));
+            Native.ApplyLineSpacing(Editor,1.4f);
+            var selected=Editor.Text.IndexOf("40 ",StringComparison.Ordinal)+12;
+            await Page(Editor.Text);
+            Editor.Select(selected,3); Editor.ScrollToCaret(); Editor.Focus();
+            Native.SetEditorFirstLine(Editor,Math.Max(0,Editor.GetLineFromCharIndex(selected)-5));
+            await Task.Delay(80);
+            var first=Native.EditorFirstLine(Editor);
+            Require(Editor.GetLineFromCharIndex(selected)>39,"Document did not wrap");
+            Call("ShowPreviewLineMarker",selected);
+            Field<System.Windows.Forms.Timer>("_previewLineFadeTimer").Stop();
+            Native.SetEditorFirstLine(Editor,first+1);
+            Call("UpdatePreviewLineMarker");
+            using(var geometry=new EditorTextGeometry(Editor))
+            {
+                Require(geometry.TryGet(selected,out _,out var bottom),"Scrolled geometry missing");
+                var marker=Field<Control>("_previewLineMarker");
+                Require(marker.Visible && marker.Bottom<=bottom+1,$"Underline exceeded native line boundary: visible={marker.Visible}, rect={marker.Bounds}, nativeBottom={bottom}");
+            }
+            using(var numbers=new Bitmap(gutter.Width,gutter.Height))
+                gutter.DrawToBitmap(numbers,new Rectangle(Point.Empty,numbers.Size));
+            Equal(selected,Editor.SelectionStart); Equal(3,Editor.SelectionLength);
+            Equal(first+1,Native.EditorFirstLine(Editor));
+            Call("HidePreviewLineMarker");
+        });
         string source="# 커서 보존\n\n"+string.Join("\n\n",Enumerable.Range(1,90).Select(i=>$"문단 {i:D2} 편집 위치를 보존하는 긴 문서입니다."));
         async Task Prepare(string? value=null)
         {
@@ -1003,6 +1146,44 @@ internal static class Checks
             await Wait(async()=>(await JS("window.__lastTrustedClick===true")).GetBoolean());
             await Task.Delay(150);
         }
+        await TestAsync("VIEW-CLICK-01","VIEW click shows the themed editor line marker",async()=>
+        {
+            var value=string.Join("\n",Enumerable.Range(1,40).Select(i=>"문서 줄 "+i));
+            Tab.EditMode=true;Tab.Split=SplitMode.Vertical;Text(value);await Page(value);
+            Call("MoveEditorToPreviewLine",20);await Task.Delay(80);
+            var marker=Field<Control>("_previewLineMarker");
+            Require(marker.Visible && marker.Width>0 && marker.Height>0 && marker.Bounds.Top>=0,"Editor line marker is not visible");
+            Require(marker.Top>Editor.ClientSize.Height/4 && marker.Top<Editor.ClientSize.Height/2,$"Marker is not positioned near the VIEW target height: top={marker.Top}, height={Editor.ClientSize.Height}");
+            Equal(Editor.Text.IndexOf("문서 줄 20",StringComparison.Ordinal),Editor.SelectionStart);
+            await Task.Delay(150);
+            var fadedMarker=Field<EditorPreviewLineMarker>("_previewLineMarker");
+            Require(fadedMarker.DisplayOpacity>0f && fadedMarker.DisplayOpacity<1f,$"Marker did not start fading immediately: opacity={fadedMarker.DisplayOpacity}");
+            await Task.Delay(450);
+            Require(!marker.Visible,"Marker did not disappear after the 0.5 second fade-out");
+        });
+        await TestAsync("VIEW-CLICK-02","Editor key navigation does not show the mouse-only line marker",async()=>
+        {
+            const string value="첫 줄\n클릭 대상 줄\n마지막 줄";
+            Tab.EditMode=true;Tab.Split=SplitMode.Vertical;Text(value);await Page(value);
+            Call("MoveEditorToPreviewLine",2);await Task.Delay(80);
+            var marker=Field<Control>("_previewLineMarker");Require(marker.Visible,"Marker did not appear before hide check");
+            await Task.Delay(600);
+            Require(!marker.Visible,"Marker did not disappear after the mouse-click display interval");
+            Key(Keys.Left);
+            typeof(Control).GetMethod("OnKeyUp",Flags)!.Invoke(Editor,new object[]{new KeyEventArgs(Keys.Left)});
+            await Task.Delay(80);
+            Require(!marker.Visible,"Keyboard cursor movement recreated the mouse-only line marker");
+        });
+        await TestAsync("VIEW-CLICK-03","Editor mouse click shows both editor and VIEW underlines",async()=>
+        {
+            const string value="첫 줄\n클릭 대상 줄\n마지막 줄";
+            Tab.EditMode=true;Tab.Split=SplitMode.Vertical;Text(value);await Page(value);
+            Editor.Select(Editor.Text.IndexOf("클릭 대상 줄",StringComparison.Ordinal),0);Editor.Focus();
+            typeof(Control).GetMethod("OnMouseUp",Flags)!.Invoke(Editor,new object[]{new MouseEventArgs(MouseButtons.Left,1,8,8,0)});
+            await Task.Delay(80);
+            Require(Field<Control>("_previewLineMarker").Visible,"Editor underline did not appear after editor click");
+            await Wait(async()=>(await JS("(()=>{const e=document.getElementById('md-cursor-line-indicator');return !!e&&!e.hidden;})()")).GetBoolean());
+        });
         await TestAsync("CLICK-01","Trusted VIEW click navigates to a logical source line after wrapped text",async()=>
         {
             var value="# 시작\n\n"+string.Join(" ",Enumerable.Repeat("아주 긴 문단의 자동 줄바꿈 확인",60))+"\n\n## 클릭할 제목\n\n클릭한 뒤 여기에 입력";

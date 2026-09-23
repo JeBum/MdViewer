@@ -10,9 +10,22 @@ https://github.com/JeBum/MDviewer
 
 MDviewer는 Windows에서 Markdown 문서를 편집하고, 실시간으로 보기 좋게 렌더링하며, Word 문서로 내보낼 수 있는 가벼운 데스크톱 앱입니다.
 
-별도 웹 뷰어는 [web/README.md](web/README.md)에 설치·실행 방법이 있습니다. 외부 서버 연동은 사용하지 않습니다. Windows 앱은 Mermaid만 내장 렌더링하고 PlantUML·Graphviz/DOT·ZenUML·Kroki는 일반 코드 블록으로 표시하며, 웹 뷰어는 Mermaid와 Graphviz/DOT을 내장 렌더링합니다.
+별도 웹 뷰어는 [web/README.md](web/README.md)에 설치·실행 방법이 있습니다. 외부 서버 연동은 사용하지 않습니다. Windows 앱은 Mermaid만 내장 렌더링하고 PlantUML·Graphviz/DOT·ZenUML·Kroki는 일반 코드 블록으로 표시합니다.
 
-HTML/HTM, INI/CFG/CONF, BAT/CMD, LOG, XML, CSS, JS/TS, C/C++/C#/Java, Python, Shell, YAML/TOML 등 텍스트 파일을 열 수 있습니다. 전용 Markdown/JSON 처리가 없는 파일은 HTML을 실행하지 않고 안전한 TEXT 원문으로 표시합니다.
+## 파일 형식 지원
+
+### 파싱·렌더링하는 형식
+
+- Markdown: .md, .markdown, .txt
+- JSON/JSONC: .json, .jsonc — 자동 정렬과 구문 강조
+- Mermaid: Markdown 코드 블록의 mermaid 언어 태그 — 플로차트, 시퀀스, 클래스, 상태, 간트 등
+- 일반 Markdown 요소: 제목, 목록, 표, 인용, 링크, 이미지, 체크박스, 수식
+
+### 원문 TEXT로 표시하는 형식
+
+.html, .htm, .ini, .cfg, .conf, .bat, .cmd, .log, .xml, .css, .js, .ts, .cs, .h, .hpp, .c, .cpp, .java, .py, .sh, .ps1, .yaml, .yml, .toml, .properties, .env, .csv, .sql, .svg
+
+전용 파서가 없는 텍스트 파일은 HTML로 실행하지 않고 원문 TEXT로 표시합니다. PlantUML, Graphviz/DOT, ZenUML, Kroki 코드 블록도 외부 연동 없이 일반 코드로 표시합니다.
 
 PDF 파일은 WebView2의 내장 PDF 뷰어로 열어 읽을 수 있습니다. PNG/JPEG/GIF/WebP/BMP 이미지와 MP3/WAV/OGG/MP4/WebM 미디어도 브라우저 표시 방식으로 열립니다. 원본 보호를 위해 이 파일들은 편집 모드와 저장을 지원하지 않으며, 편집 모드 선택 시 읽기 전용 안내가 표시됩니다.
 
@@ -41,30 +54,24 @@ PDF 파일은 WebView2의 내장 PDF 뷰어로 열어 읽을 수 있습니다. P
 
 ## 빌드
 
-```bat
-build.bat
+```powershell
+.\release.bat
 ```
 
 결과: `publish\MDviewer.exe`
 
-`release.bat`은 실행 중인 `publish\MDviewer.exe`를 교체할 수 없으면 기존 앱을 유지하고 새 실행 파일을 `publish_next\MDviewer.exe`에 생성합니다.
+현재 배포 버전: [v1.3.2](https://github.com/JeBum/MDviewer/releases/tag/v1.3.2). 릴리즈의 Assets에서 `MDviewer.exe`를 다운로드할 수 있습니다.
 
-설치본:
-
-```bat
-make_setup.bat
-```
-
-결과: `installer\MDviewerSetup.exe`
+release.bat은 실행 중인 MDviewer를 종료한 뒤 `publish\MDviewer.exe`를 새로 생성합니다. 실행 파일이 계속 잠겨 있으면 별도 폴더를 만들지 않고 오류로 중단합니다. 구형 빌드·설치 스크립트는 저장소에서 제거되었습니다.
 
 <a id="file-association"></a>
 ## `.md` 파일 연결 프로그램 등록
 
-설치 프로그램(`installer\MDviewerSetup.exe`)을 실행할 때 **.md file association** 항목을 선택하면 Windows 탐색기에서 `.md` 파일을 더블 클릭해 MDviewer로 열 수 있습니다. 설치 후에도 등록하려면 다음 순서로 설정합니다.
+별도 설치 프로그램은 제공하지 않습니다. 현재 실행 중인 MDviewer의 홈 화면에서 **md 파일 연결프로그램 등록**을 클릭하면 현재 실행 파일을 `.md`/`.markdown` 연결 프로그램으로 등록할 수 있습니다. 수동 등록은 다음 순서로 진행합니다.
 
 1. .md 파일을 마우스 오른쪽 버튼으로 클릭합니다.
 2. **연결 프로그램 → 다른 앱 선택**을 클릭합니다.
-3. **이 PC에서 앱 선택**을 클릭하고 설치 폴더의 `MDviewer.exe`를 선택합니다.
+3. **이 PC에서 앱 선택**을 클릭하고 `publish\MDviewer.exe`를 선택합니다.
 4. **항상 이 앱을 사용하여 .md 파일 열기**를 체크합니다.
 
 ## 샘플 문서

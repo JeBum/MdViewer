@@ -2,9 +2,6 @@ bin/
 obj/
 publish/
 publish_next/
-publish_install/
-installer/
-setup_proj/payload/
 .vs/
 *.user
 *.suo

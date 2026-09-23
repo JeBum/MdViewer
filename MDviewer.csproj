@@ -10,7 +10,7 @@
     <RootNamespace>MDviewer</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
-    <Version>1.4.0</Version>
+    <Version>1.3.2</Version>
     <BuildDate>$([System.DateTime]::Now.ToString("yyyy.MM.dd"))</BuildDate>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
