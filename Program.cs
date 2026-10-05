@@ -3657,7 +3657,21 @@ sealed class FileTab : Panel
                 ApplyWebZoom(_web2, _zoomWeb2);
             });
         }
-        catch { }
+        catch (Exception ex)
+        {
+            try
+            {
+                var errorHtml = "<div class='markdown-alert markdown-alert-caution'>" +
+                    "<p class='markdown-alert-title'>미리보기 렌더링 오류</p>" +
+                    "<div class='markdown-alert-body'>" +
+                    System.Net.WebUtility.HtmlEncode(ex.Message) +
+                    "</div></div>";
+                var doc = WrapHtml(errorHtml);
+                if (_web.CoreWebView2 != null) _web.CoreWebView2.NavigateToString(doc);
+                if (_web2.CoreWebView2 != null) _web2.CoreWebView2.NavigateToString(doc);
+            }
+            catch { }
+        }
     }
 
     int GutterWidth(RichTextBox box)
@@ -3980,7 +3994,22 @@ sealed class FileTab : Panel
         }
     }
 
+    // 표(Table) 앞/뒤에 빈 줄이 없으면 Markdig이 이를 일반 문단(Paragraph)으로 인식하여
+    // 수백 행 이상의 표에서 밑줄(_) 등이 과도하게 중첩되어 깊이 제한(depth limit exceeded) 예외가 발생한다.
+    // 따라서 표 시작 전뿐만 아니라 표 종료 후 본문과의 사이에도 빈 줄을 자동 보완한다.
     static bool IsTableLine(string line) => line.TrimStart().StartsWith('|');
+
+    static bool NeedsBlankBefore(string[] lines, int i)
+    {
+        if (i <= 0) return false;
+        bool curTable = IsTableLine(lines[i]);
+        bool prevTable = IsTableLine(lines[i - 1]);
+        if (curTable && !prevTable && lines[i - 1].Trim().Length > 0)
+            return true;
+        if (!curTable && prevTable && lines[i].Trim().Length > 0)
+            return true;
+        return false;
+    }
 
     static int CountInsertedBlanks(string src, int origLine)
     {
@@ -3990,7 +4019,7 @@ sealed class FileTab : Panel
         int last = Math.Min(origLine, lines.Length);
         for (int i = 0; i < last; i++)
         {
-            if (IsTableLine(lines[i]) && i > 0 && lines[i - 1].Trim().Length > 0 && !IsTableLine(lines[i - 1]))
+            if (NeedsBlankBefore(lines, i))
                 extra++;
         }
         return extra;
@@ -4005,7 +4034,7 @@ sealed class FileTab : Panel
         int extra = 0;
         for (int i = 0; i < lines.Length; i++)
         {
-            if (IsTableLine(lines[i]) && i > 0 && lines[i - 1].Trim().Length > 0 && !IsTableLine(lines[i - 1]))
+            if (NeedsBlankBefore(lines, i))
                 extra++;
             if (i + extra >= normLine) return i;
         }
@@ -4022,15 +4051,9 @@ sealed class FileTab : Panel
         var sb = new System.Text.StringBuilder(src.Length + 64);
         for (int i = 0; i < lines.Length; i++)
         {
-            var line = lines[i];
-            bool table = line.TrimStart().StartsWith('|');
-            if (table && i > 0)
-            {
-                var prev = lines[i - 1];
-                if (prev.Trim().Length > 0 && !prev.TrimStart().StartsWith('|'))
-                    sb.Append('\n');
-            }
-            sb.Append(line);
+            if (NeedsBlankBefore(lines, i))
+                sb.Append('\n');
+            sb.Append(lines[i]);
             if (i < lines.Length - 1) sb.Append('\n');
         }
         return sb.ToString();

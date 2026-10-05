@@ -131,6 +131,20 @@ internal static class Checks
         Test("LINE-03", "Logical line count empty and trailing newline", () => { Equal(1, FileTab.CountLogicalLines("")); Equal(3, FileTab.CountLogicalLines("a\nb\n")); });
         Test("LINE-04", "Line-to-character mapping", () => { Equal(3, FileTab.GetCharIndexOfLogicalLine("a\r\nb\nc", 1)); Equal(5, FileTab.GetCharIndexOfLogicalLine("a\r\nb\nc", 2)); });
         Test("MD-01", "Headings bold italic strike and mark", () => { var h = Render("# Title\n\n**bold** *italic* ~~strike~~ ==mark=="); foreach (var s in new[] { "<h1", "<strong>bold</strong>", "<em>italic</em>", "<del>strike</del>", "<mark>mark</mark>" }) Require(h.Contains(s), s + " missing"); });
+        Test("MD-06", "Table without trailing blank line and .test markdown rendering", () => {
+            var h = Render("| A | B |\n|---|---|\n| 1 | 2 |\nfootnote text");
+            Require(h.Contains("<table"), "No table");
+            Require(h.Contains("footnote text"), "No footnote text");
+            var src = "|A|B|\n|-|-|\n|1|2|\nend";
+            for (int i = 0; i < 5; i++) Equal(i, (int)Call("FromNormLine", src, (int)Call("ToNormLine", src, i)!)!);
+            var testPath = Path.Combine(Root, ".test", "20261004_XGBoost_LSTM_학습결과분석_보고서.md");
+            if (File.Exists(testPath))
+            {
+                var content = File.ReadAllText(testPath);
+                var rendered = Render(content);
+                Require(rendered.Length > 0 && rendered.Contains("<table"), ".test document render failed");
+            }
+        });
         Test("MD-02", "Table without preceding blank line", () => Require(Render("intro\n| A | B |\n|---|---|\n| 1 | 2 |").Contains("<table"), "No table"));
         Test("MD-03", "Source-line mapping survives table normalization", () => { var src = "intro\n|A|B|\n|-|-|\n|1|2|\n\nend"; for (int i = 0; i < 6; i++) Equal(i, (int)Call("FromNormLine", src, (int)Call("ToNormLine", src, i)!)!); });
         Test("MD-04", "Frontmatter excluded from preview", () => { var h = Render("---\ntitle: secretmetadata\n---\n\nBody"); Require(!h.Contains("secretmetadata") && h.Contains("Body"), h); });
