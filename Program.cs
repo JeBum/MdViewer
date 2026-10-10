@@ -6,6 +6,9 @@
 // 3. 작업 완료 후 항상 release.bat을 실행하여 단일 실행 파일(publish\MDviewer.exe) 빌드 및 검증 완료
 // 4. 변경 이력은 History.md에 일자별로 상세 기록 유지
 // ==============================================================================================
+// [요건 이력]
+// WINSIZE-01 / 2026-10-10 / 이미 실행 중인 앱에서 md 파일을 더블클릭해 열어도 현재 창 크기(최대화 포함)를 유지한다.
+// ==============================================================================================
 
 using System.Diagnostics;
 using System.Drawing.Text;
@@ -27,6 +30,7 @@ namespace MDviewer;
 enum SplitMode { None, Vertical, Horizontal }
 enum AppTheme { Sogang, Albatross, BlueSky, ForestGreen }
 enum ColumnMode { Single = 1, Two = 2, Three = 3, Auto = 0 }
+enum DocumentWidthMode { Standard = 0, Wide = 1, Full = 2 }
 enum LargeFileLoadMode { Tail50Mb, Chunked, Full }
 
 static class Program
@@ -187,6 +191,9 @@ sealed class MainForm : Form, IMessageFilter
     ToolStripMenuItem? _miCol2;
     ToolStripMenuItem? _miCol3;
     ToolStripMenuItem? _miColAuto;
+    ToolStripMenuItem? _miWidthStandard;
+    ToolStripMenuItem? _miWidthWide;
+    ToolStripMenuItem? _miWidthFull;
     bool _menuBusy;
     readonly TabControl _tabs = new()
     {
@@ -875,8 +882,32 @@ sealed class MainForm : Form, IMessageFilter
         columnMenu.DropDownItems.AddRange(new ToolStripItem[] { _miCol1, _miCol2, _miCol3, _miColAuto });
         _menu.Items.Add(columnMenu);
 
+        // 요구사항: 문서 폭(너비) 선택 기능 제공 (기본 46rem, 넓게 70rem, 전체 너비 창 맞춤)
+        _miWidthStandard = new ToolStripMenuItem("기본 (46rem)") { CheckOnClick = true };
+        _miWidthWide = new ToolStripMenuItem("넓게 (70rem)") { CheckOnClick = true };
+        _miWidthFull = new ToolStripMenuItem("전체 너비 (창 맞춤)") { CheckOnClick = true };
+        _miWidthStandard.CheckedChanged += (_, _) =>
+        {
+            if (_menuBusy) return;
+            SetDocWidthMode(DocumentWidthMode.Standard);
+        };
+        _miWidthWide.CheckedChanged += (_, _) =>
+        {
+            if (_menuBusy) return;
+            SetDocWidthMode(DocumentWidthMode.Wide);
+        };
+        _miWidthFull.CheckedChanged += (_, _) =>
+        {
+            if (_menuBusy) return;
+            SetDocWidthMode(DocumentWidthMode.Full);
+        };
+        var widthMenu = new ToolStripMenuItem("문서 폭");
+        widthMenu.DropDownItems.AddRange(new ToolStripItem[] { _miWidthStandard, _miWidthWide, _miWidthFull });
+        _menu.Items.Add(widthMenu);
+
         SyncThemeMenu();
         SyncColumnMenu();
+        SyncDocWidthMenu();
         ApplyMenuFont();
         SizeMenu();
         _menu.Opening += (_, _) =>
@@ -907,6 +938,7 @@ sealed class MainForm : Form, IMessageFilter
             }
             SyncThemeMenu();
             SyncColumnMenu();
+            SyncDocWidthMenu();
             _menuBusy = false;
         };
     }
@@ -1014,6 +1046,32 @@ sealed class MainForm : Form, IMessageFilter
                 tab.ApplyColumnMode();
         }
         SyncColumnMenu();
+    }
+
+    void SyncDocWidthMenu()
+    {
+        if (_miWidthStandard == null || _miWidthWide == null || _miWidthFull == null) return;
+        var busy = _menuBusy;
+        _menuBusy = true;
+        try
+        {
+            _miWidthStandard.Checked = Brand.DocWidthMode == DocumentWidthMode.Standard;
+            _miWidthWide.Checked = Brand.DocWidthMode == DocumentWidthMode.Wide;
+            _miWidthFull.Checked = Brand.DocWidthMode == DocumentWidthMode.Full;
+        }
+        finally { _menuBusy = busy; }
+    }
+
+    void SetDocWidthMode(DocumentWidthMode mode)
+    {
+        if (Brand.DocWidthMode != mode)
+        {
+            Brand.DocWidthMode = mode;
+            Brand.SaveDocWidth();
+            foreach (var tab in GetAllTabs())
+                tab.ApplyDocWidthMode();
+        }
+        SyncDocWidthMenu();
     }
 
     void ApplyTheme()
@@ -1246,9 +1304,10 @@ sealed class MainForm : Form, IMessageFilter
 
     public void BringToForeground()
     {
+        // SW_RESTORE only when minimized: it returns to the prior (maximized/normal) state
+        // and keeps the user's current window size. Calling it on a maximized window would shrink it.
         if (WindowState == FormWindowState.Minimized)
-            WindowState = FormWindowState.Normal;
-        Native.ShowWindow(Handle, 9);
+            Native.ShowWindow(Handle, 9);
         Native.SetForegroundWindow(Handle);
         Activate();
         BringToFront();
@@ -2023,6 +2082,7 @@ sealed class FileTab : Panel
         ApplyWebZoom(_web, _zoomWeb);
         ApplyWebZoom(_web2, _zoomWeb2);
         ApplyColumnMode();
+        ApplyDocWidthMode();
         RefreshPreview(forceReload: true);
         _gutter.Invalidate();
     }
@@ -2037,6 +2097,20 @@ sealed class FileTab : Panel
         if (_ready && _splitMode != SplitMode.None && _web2.CoreWebView2 != null)
         {
             var js = $"if(typeof setColumnMode==='function')setColumnMode({(int)Brand.ColumnViewMode});";
+            _ = _web2.CoreWebView2.ExecuteScriptAsync(js);
+        }
+    }
+
+    public void ApplyDocWidthMode()
+    {
+        if (_ready && _web.CoreWebView2 != null)
+        {
+            var js = $"if(typeof setDocWidthMode==='function')setDocWidthMode({(int)Brand.DocWidthMode});";
+            _ = _web.CoreWebView2.ExecuteScriptAsync(js);
+        }
+        if (_ready && _splitMode != SplitMode.None && _web2.CoreWebView2 != null)
+        {
+            var js = $"if(typeof setDocWidthMode==='function')setDocWidthMode({(int)Brand.DocWidthMode});";
             _ = _web2.CoreWebView2.ExecuteScriptAsync(js);
         }
     }
@@ -3766,7 +3840,18 @@ sealed class FileTab : Panel
         renderer.Render(document);
         var html = writer.ToString();
         html = RenderCallouts(html);
+        html = WrapTables(html);
         return RenderJsonCodeBlocks(html);
+    }
+
+    // 요구사항: 표(Table)가 화면이나 문서 폭을 초과하여 옆으로 늘어날 때 내용이 잘리지 않고 가로 스크롤 가능하도록 전용 래퍼로 감싼다.
+    static string WrapTables(string html)
+    {
+        return Regex.Replace(
+            html,
+            @"(<table\b[^>]*>[\s\S]*?</table>)",
+            "<div class='md-table-wrap'>$1</div>",
+            RegexOptions.IgnoreCase);
     }
 
     static string RenderCallouts(string html)
@@ -4068,6 +4153,12 @@ sealed class FileTab : Panel
             ColumnMode.Auto => "multi-col col-auto",
             _ => "col-1"
         };
+        string widthClass = Brand.DocWidthMode switch
+        {
+            DocumentWidthMode.Wide => "width-wide",
+            DocumentWidthMode.Full => "width-full",
+            _ => "width-standard"
+        };
         return "<!doctype html><html><head><meta charset='utf-8'/>" +
         "<meta name='viewport' content='width=device-width, initial-scale=1'/>" +
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css'/>" +
@@ -4118,6 +4209,18 @@ sealed class FileTab : Panel
          ".mermaid-diagram svg{max-width:100%;height:auto;}" +
          ".mermaid-source{margin:0;padding:12px;text-align:left;white-space:pre-wrap;overflow-x:auto;background:#282c34;color:#abb2bf;}" +
          ".mermaid-error{padding:8px 12px;color:#b42318;text-align:left;}" +
+         "body:not(.multi-col).width-standard .md{max-width:46rem;}" +
+         "body:not(.multi-col).width-wide .md{max-width:70rem;}" +
+         "body:not(.multi-col).width-full .md{max-width:none;width:calc(100% - 48px);margin:0 24px;}" +
+         "html:has(meta[name='word-export']) body .md{max-width:46rem !important;width:100% !important;margin:0 auto !important;}" +
+         ".md{overflow-wrap:anywhere;word-break:break-word;}" +
+         ".md-table-wrap{width:100%;max-width:100%;overflow-x:auto;margin:0.8em 0;box-sizing:border-box;-webkit-overflow-scrolling:touch;}" +
+         ".md-table-wrap>table{width:100%;min-width:100%;margin:0 !important;border-collapse:collapse;}" +
+         "table th,table td,.md-table-wrap>table th,.md-table-wrap>table td{overflow-wrap:anywhere;word-break:break-word;}" +
+         ".md-table-wrap::-webkit-scrollbar{height:8px;}" +
+         ".md-table-wrap::-webkit-scrollbar-track{background:rgba(0,0,0,0.04);border-radius:4px;}" +
+         ".md-table-wrap::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.35);border-radius:4px;}" +
+         ".md-table-wrap::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,0.6);}" +
          "html:has(meta[name='word-export']) body.multi-col{overflow-x:hidden !important;overflow-y:auto !important;height:auto !important;width:100% !important;}" +
          "html:has(meta[name='word-export']) body.multi-col .md{max-width:46rem !important;width:100% !important;height:auto !important;margin:0 auto !important;column-count:1 !important;column-width:auto !important;overflow:visible !important;}" +
          "body.multi-col:not(.md-edit-position){margin:0 !important;padding:0 !important;width:100vw !important;height:100vh !important;overflow:hidden !important;}" +
@@ -4125,14 +4228,14 @@ sealed class FileTab : Panel
          "body.col-2:not(.md-edit-position) .md{column-count:2 !important;}" +
          "body.col-3:not(.md-edit-position) .md{column-count:3 !important;}" +
          "body.col-auto:not(.md-edit-position) .md{column-width:400px !important;}" +
-         "body.multi-col:not(.md-edit-position) pre,body.multi-col:not(.md-edit-position) table,body.multi-col:not(.md-edit-position) figure,body.multi-col:not(.md-edit-position) img,body.multi-col:not(.md-edit-position) blockquote,body.multi-col:not(.md-edit-position) .code-block-wrapper,body.multi-col:not(.md-edit-position) .markdown-alert,body.multi-col:not(.md-edit-position) .katex-display,body.multi-col:not(.md-edit-position) .mermaid-diagram{break-inside:avoid !important;page-break-inside:avoid !important;}" +
+         "body.multi-col:not(.md-edit-position) pre,body.multi-col:not(.md-edit-position) .md-table-wrap,body.multi-col:not(.md-edit-position) table,body.multi-col:not(.md-edit-position) figure,body.multi-col:not(.md-edit-position) img,body.multi-col:not(.md-edit-position) blockquote,body.multi-col:not(.md-edit-position) .code-block-wrapper,body.multi-col:not(.md-edit-position) .markdown-alert,body.multi-col:not(.md-edit-position) .katex-display,body.multi-col:not(.md-edit-position) .mermaid-diagram{break-inside:avoid !important;page-break-inside:avoid !important;}" +
          "body.multi-col:not(.md-edit-position) img{max-height:calc(100vh - 120px) !important;max-width:100% !important;object-fit:contain !important;}" +
          "body.multi-col:not(.md-edit-position) h1,body.multi-col:not(.md-edit-position) h2,body.multi-col:not(.md-edit-position) h3{break-after:avoid !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar{height:8px !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-track{background:transparent !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.35) !important;border-radius:4px !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,0.6) !important;}" +
-          $"</style></head><body class='{colClass}' style='--md-cursor-accent:{Brand.CursorActiveAccentHex}'><article class='md'>" +
+          $"</style></head><body class='{colClass} {widthClass}' style='--md-cursor-accent:{Brand.CursorActiveAccentHex}'><article class='md'>" +
         body + "</article>" + ScrollScript + "</body></html>";
     }
 
@@ -4509,6 +4612,12 @@ sealed class FileTab : Panel
         "if(isMulti&&!wasMulti){if(md)md.scrollLeft=0;}" +
         "else if(!isMulti&&wasMulti){window.scrollTo({top:0,left:0});}" +
         "}" +
+        "function setDocWidthMode(mode){" +
+        "document.body.classList.remove('width-standard','width-wide','width-full');" +
+        "if(mode===1){document.body.classList.add('width-wide');}" +
+        "else if(mode===2){document.body.classList.add('width-full');}" +
+        "else{document.body.classList.add('width-standard');}" +
+        "}" +
         "function isMultiCol(){return document.body.classList.contains('multi-col')&&!document.body.classList.contains('md-edit-position');}" +
         "function getColStep(){" +
         "const md=document.querySelector('.md');" +
@@ -4706,8 +4815,8 @@ static class Brand
     {
         AppTheme.Sogang =>
             "html,body{margin:0;background:#fafafa;color:#2a2a2a;width:100%}" +
-            "body{font:15.5px/1.6 'SogangUni','Malgun Gothic',sans-serif;overflow-x:hidden}" +
-            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box}" +
+            "body{font:15.5px/1.6 'SogangUni','Malgun Gothic',sans-serif;overflow-x:auto}" +
+            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box;overflow-wrap:anywhere;word-break:break-word}" +
             "h1,h2,h3{line-height:1.25;color:#9e2a2f} h1{font-size:1.85rem} h2{font-size:1.3rem;border-bottom:1px solid #b1b3b6;padding-bottom:.2em}" +
             "p{margin:0.8em 0;line-height:1.6}" +
             "ul,ol{margin:0.6em 0;padding-left:1.5em;line-height:1.6}" +
@@ -4716,15 +4825,15 @@ static class Brand
             "pre{background:#2a2a2a;color:#f3f3f3;border-radius:12px;padding:10px 14px;white-space:pre-wrap;word-break:break-word}" +
             "pre code{background:none;padding:0;color:inherit}" +
             "blockquote{margin:0.8em 0;padding:.2em 0 .2em 1em;border-left:3px solid #b3292e;color:#6a6c6e}" +
-            "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#fff}" +
-            "th,td{border:1px solid #b1b3b6;padding:.4em .6em} th{background:#f3e8e9;color:#9e2a2f;text-align:left}" +
+            "table{border-collapse:collapse;width:100%;max-width:100%;margin:0.8em 0;background:#fff}" +
+            "th,td{border:1px solid #b1b3b6;padding:.4em .6em;word-break:break-word;overflow-wrap:anywhere} th{background:#f3e8e9;color:#9e2a2f;text-align:left}" +
             "img{max-width:100%}" +
             ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}",
 
         AppTheme.BlueSky =>
             "html,body{margin:0;background:#ffffff;color:#023373;width:100%}" +
-            "body{font:15.5px/1.6 'SogangUni','Malgun Gothic',sans-serif;overflow-x:hidden}" +
-            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box}" +
+            "body{font:15.5px/1.6 'SogangUni','Malgun Gothic',sans-serif;overflow-x:auto}" +
+            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box;overflow-wrap:anywhere;word-break:break-word}" +
             "h1,h2,h3{line-height:1.25;color:#035aa6} h1{font-size:1.85rem} h2{font-size:1.3rem;border-bottom:1px solid #a0c4f2;padding-bottom:.2em}" +
             "p{margin:0.8em 0;line-height:1.6}" +
             "ul,ol{margin:0.6em 0;padding-left:1.5em;line-height:1.6}" +
@@ -4734,16 +4843,16 @@ static class Brand
             "pre{background:#023373;color:#f8fafc;border-radius:12px;padding:10px 14px;white-space:pre-wrap;word-break:break-word}" +
             "pre code{background:none;padding:0;color:inherit}" +
             "blockquote{margin:0.8em 0;padding:.2em 0 .2em 1em;border-left:3px solid #6da7f2;color:#035aa6;background:#cedef2;border-radius:0 6px 6px 0;}" +
-            "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#ffffff}" +
-            "th,td{border:1px solid #a0c4f2;padding:.4em .6em} th{background:#cedef2;color:#035aa6;text-align:left}" +
+            "table{border-collapse:collapse;width:100%;max-width:100%;margin:0.8em 0;background:#ffffff}" +
+            "th,td{border:1px solid #a0c4f2;padding:.4em .6em;word-break:break-word;overflow-wrap:anywhere} th{background:#cedef2;color:#035aa6;text-align:left}" +
             "img{max-width:100%}" +
             ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}",
 
         // 포레스트 그린: 흰 배경, 서강 글꼴, 짙은 초록 포인트.
         AppTheme.ForestGreen =>
             "html,body{margin:0;background:#ffffff;color:#25332b;width:100%}" +
-            "body{font:15.5px/1.6 'SogangUni','Malgun Gothic',sans-serif;overflow-x:hidden}" +
-            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box}" +
+            "body{font:15.5px/1.6 'SogangUni','Malgun Gothic',sans-serif;overflow-x:auto}" +
+            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box;overflow-wrap:anywhere;word-break:break-word}" +
             "h1,h2,h3{line-height:1.25;color:#2f6b4f} h1{font-size:1.85rem} h2{font-size:1.3rem;border-bottom:1px solid #bdd5c5;padding-bottom:.2em}" +
             "p{margin:0.8em 0;line-height:1.6}" +
             "ul,ol{margin:0.6em 0;padding-left:1.5em;line-height:1.6}" +
@@ -4753,15 +4862,15 @@ static class Brand
             "pre{background:#25332b;color:#f5faf7;border-radius:12px;padding:10px 14px;white-space:pre-wrap;word-break:break-word}" +
             "pre code{background:none;padding:0;color:inherit}" +
             "blockquote{margin:0.8em 0;padding:.2em 0 .2em 1em;border-left:3px solid #2f6b4f;color:#5c7365;background:#eaf4ee;border-radius:0 6px 6px 0;}" +
-            "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#fff}" +
-            "th,td{border:1px solid #bdd5c5;padding:.4em .6em} th{background:#eaf4ee;color:#2f6b4f;text-align:left}" +
+            "table{border-collapse:collapse;width:100%;max-width:100%;margin:0.8em 0;background:#fff}" +
+            "th,td{border:1px solid #bdd5c5;padding:.4em .6em;word-break:break-word;overflow-wrap:anywhere} th{background:#eaf4ee;color:#2f6b4f;text-align:left}" +
             "img{max-width:100%}" +
             ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}",
 
         AppTheme.Albatross =>
             "html,body{margin:0;background:#fafaf8;color:#0f1012;width:100%}" +
-            "body{font:15.5px/1.6 'Segoe UI','Malgun Gothic',sans-serif;overflow-x:hidden}" +
-            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box}" +
+            "body{font:15.5px/1.6 'Segoe UI','Malgun Gothic',sans-serif;overflow-x:auto}" +
+            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box;overflow-wrap:anywhere;word-break:break-word}" +
             "h1,h2,h3{line-height:1.25;color:#43464b} h1{font-size:1.85rem} h2{font-size:1.3rem;border-bottom:1px solid #b0b3b8;padding-bottom:.2em}" +
             "p{margin:0.8em 0;line-height:1.6}" +
             "ul,ol{margin:0.6em 0;padding-left:1.5em;line-height:1.6}" +
@@ -4770,15 +4879,15 @@ static class Brand
             "pre{background:#0f1012;color:#fafaf8;border-radius:12px;padding:10px 14px;white-space:pre-wrap;word-break:break-word}" +
             "pre code{background:none;padding:0;color:inherit}" +
             "blockquote{margin:0.8em 0;padding:.2em 0 .2em 1em;border-left:3px solid #43464b;color:#43464b;background:#dadada;border-radius:0 6px 6px 0;}" +
-            "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#fafaf8}" +
-            "th,td{border:1px solid #b0b3b8;padding:.4em .6em} th{background:#dadada;color:#43464b;text-align:left}" +
+            "table{border-collapse:collapse;width:100%;max-width:100%;margin:0.8em 0;background:#fafaf8}" +
+            "th,td{border:1px solid #b0b3b8;padding:.4em .6em;word-break:break-word;overflow-wrap:anywhere} th{background:#dadada;color:#43464b;text-align:left}" +
             "img{max-width:100%}" +
             ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}",
 
         _ =>
             "html,body{margin:0;background:#fafafa;color:#1a1a1a;width:100%}" +
-            "body{font:15.5px/1.6 'Segoe UI','Malgun Gothic',sans-serif;overflow-x:hidden}" +
-            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box}" +
+            "body{font:15.5px/1.6 'Segoe UI','Malgun Gothic',sans-serif;overflow-x:auto}" +
+            ".md{max-width:46rem;width:100%;margin:0 auto;padding:24px 20px 56px;box-sizing:border-box;overflow-wrap:anywhere;word-break:break-word}" +
             "h1,h2,h3{line-height:1.25;color:#111} h1{font-size:1.85rem} h2{font-size:1.3rem;border-bottom:1px solid #ccc;padding-bottom:.2em}" +
             "p{margin:0.8em 0;line-height:1.6}" +
             "ul,ol{margin:0.6em 0;padding-left:1.5em;line-height:1.6}" +
@@ -4787,8 +4896,8 @@ static class Brand
             "pre{background:#f3f3f3;color:#111;border-radius:12px;padding:10px 14px;white-space:pre-wrap;word-break:break-word}" +
             "pre code{background:none;padding:0;color:inherit}" +
             "blockquote{margin:0.8em 0;padding:.2em 0 .2em 1em;border-left:3px solid #888;color:#555}" +
-            "table{border-collapse:collapse;width:100%;margin:0.8em 0;background:#fff}" +
-            "th,td{border:1px solid #ccc;padding:.4em .6em} th{background:#f0f0f0;color:#111;text-align:left}" +
+            "table{border-collapse:collapse;width:100%;max-width:100%;margin:0.8em 0;background:#fff}" +
+            "th,td{border:1px solid #ccc;padding:.4em .6em;word-break:break-word;overflow-wrap:anywhere} th{background:#f0f0f0;color:#111;text-align:left}" +
             "img{max-width:100%}" +
             ".katex-display{margin:0.8em 0;overflow-x:auto;overflow-y:hidden;text-align:center}"    };
 
@@ -4830,6 +4939,7 @@ static class Brand
         }
         catch { }
         LoadTheme();
+        LoadDocWidth();
     }
 
     public static void LoadTheme()
@@ -4860,6 +4970,41 @@ static class Brand
             var dir = System.IO.Path.GetDirectoryName(ThemePath)!;
             Directory.CreateDirectory(dir);
             File.WriteAllText(ThemePath, Theme.ToString());
+        }
+        catch { }
+    }
+
+    static string DocWidthPath =>
+        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MDviewer", "docwidth.txt");
+
+    public static DocumentWidthMode DocWidthMode { get; set; } = DocumentWidthMode.Standard;
+
+    public static void LoadDocWidth()
+    {
+        try
+        {
+            var p = DocWidthPath;
+            if (File.Exists(p))
+            {
+                var txt = File.ReadAllText(p).Trim();
+                if (txt.Equals("Wide", StringComparison.OrdinalIgnoreCase))
+                    DocWidthMode = DocumentWidthMode.Wide;
+                else if (txt.Equals("Full", StringComparison.OrdinalIgnoreCase))
+                    DocWidthMode = DocumentWidthMode.Full;
+                else
+                    DocWidthMode = DocumentWidthMode.Standard;
+            }
+        }
+        catch { }
+    }
+
+    public static void SaveDocWidth()
+    {
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(DocWidthPath)!;
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(DocWidthPath, DocWidthMode.ToString());
         }
         catch { }
     }

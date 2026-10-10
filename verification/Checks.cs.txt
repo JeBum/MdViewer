@@ -105,6 +105,9 @@ internal static class Checks
                 await RunWordView();
                 await RunForestTheme();
                 await RunColumnMode();
+                await RunDocWidthMode();
+                await RunTableWrap();
+                await RunWindowSizeKeep();
                 await RunThemeDirtyState();
                 await RunHomeSample();
         await RunTextAndLargeFile();
@@ -657,6 +660,87 @@ internal static class Checks
             Equal(true, (await JS("document.body.classList.contains('col-2')")).GetBoolean());
             Brand.ColumnViewMode = ColumnMode.Single; Tab.ApplyColumnMode(); await Task.Delay(150);
             Equal(false, (await JS("document.body.classList.contains('multi-col')")).GetBoolean());
+        });
+    }
+
+    static async Task RunDocWidthMode()
+    {
+        await TestAsync("WIDTH-01","Document width mode switches and applies classes",async()=>
+        {
+            var original = Brand.DocWidthMode;
+            try
+            {
+                await Page("# 문서 폭 검사\n\n문서 폭 테스트입니다.");
+                Brand.DocWidthMode = DocumentWidthMode.Standard;
+                Tab.ApplyDocWidthMode();
+                await Task.Delay(100);
+                Equal(true, (await JS("document.body.classList.contains('width-standard')")).GetBoolean());
+
+                Brand.DocWidthMode = DocumentWidthMode.Wide;
+                Tab.ApplyDocWidthMode();
+                await Task.Delay(100);
+                Equal(true, (await JS("document.body.classList.contains('width-wide')")).GetBoolean());
+                Equal(false, (await JS("document.body.classList.contains('width-standard')")).GetBoolean());
+
+                Brand.DocWidthMode = DocumentWidthMode.Full;
+                Tab.ApplyDocWidthMode();
+                await Task.Delay(100);
+                Equal(true, (await JS("document.body.classList.contains('width-full')")).GetBoolean());
+
+                Brand.SaveDocWidth();
+                Brand.DocWidthMode = DocumentWidthMode.Standard;
+                Brand.LoadDocWidth();
+                Equal(DocumentWidthMode.Full, Brand.DocWidthMode);
+            }
+            finally
+            {
+                Brand.DocWidthMode = original;
+                Brand.SaveDocWidth();
+            }
+        });
+    }
+
+    static async Task RunWindowSizeKeep()
+    {
+        using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
+        try
+        {
+            main.Show();
+            await TestAsync("WINSIZE-01","BringToForeground keeps the current window size and maximized state",async()=>
+            {
+                main.WindowState=FormWindowState.Normal;main.Size=new Size(900,650);await Task.Delay(100);
+                main.BringToForeground();await Task.Delay(100);
+                Equal(FormWindowState.Normal,main.WindowState);Equal(900,main.Width);Equal(650,main.Height);
+                main.WindowState=FormWindowState.Maximized;await Task.Delay(100);
+                main.BringToForeground();await Task.Delay(100);
+                Equal(FormWindowState.Maximized,main.WindowState);
+            });
+        }
+        finally{main.Close();}
+    }
+
+    static async Task RunTableWrap()
+    {
+        await TestAsync("TABLE-01","Table is wrapped with md-table-wrap scroll container",async()=>
+        {
+            var rendered = Render("| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |");
+            Require(rendered.Contains("<div class='md-table-wrap'>"), "Missing md-table-wrap container");
+            Require(rendered.Contains("<table"), "Missing table");
+
+            await Page("| Col 1 | Col 2 | Col 3 |\n|---|---|---|\n| val 1 | val 2 | val 3 |");
+            Equal(true, (await JS("Boolean(document.querySelector('.md-table-wrap > table'))")).GetBoolean());
+            var overflow = (await JS("getComputedStyle(document.querySelector('.md-table-wrap')).overflowX")).GetString();
+            Require(overflow == "auto" || overflow == "scroll", "Expected overflow-x to be auto or scroll; actual " + overflow);
+        });
+        await TestAsync("TABLE-02","Table cells with long uninterrupted English words wrap into multiple lines",async()=>
+        {
+            var longWordTable = "| 항목 | 파일 경로 |\n|---|---|\n| 긴경로 | Test/Fault/CanSignalDetection/SubFolder/DeepPath/ExtraLongFileNameWithoutSpaces.blf.csv |";
+            await Page(longWordTable);
+            var wordBreak = (await JS("getComputedStyle(document.querySelector('.md-table-wrap td')).wordBreak")).GetString();
+            var overflowWrap = (await JS("getComputedStyle(document.querySelector('.md-table-wrap td')).overflowWrap")).GetString();
+            Require(wordBreak == "break-word" || overflowWrap == "anywhere", "Expected word-break:break-word or overflow-wrap:anywhere; actual " + wordBreak + ", " + overflowWrap);
+            var tdHeight = (await JS("document.querySelectorAll('.md-table-wrap td')[1].offsetHeight")).GetInt32();
+            Require(tdHeight >= 35, "Expected table cell with long uninterrupted word to wrap into multiple lines; height=" + tdHeight);
         });
     }
 

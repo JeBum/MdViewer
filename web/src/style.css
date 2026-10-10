@@ -25,8 +25,9 @@ button:focus-visible,.button:focus-visible,textarea:focus-visible{outline:2px so
 .markdown-body h3{font-size:1.15em}
 .markdown-body a{color:#2867a8}
 .markdown-body blockquote{border-left:4px solid #8aa7cc;margin:1.2em 0;padding:.1em 1em;color:#596b7d;background:#f5f8fc}
-.markdown-body table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}
-.markdown-body td,.markdown-body th{border:1px solid #ccd6e1;padding:6px 10px}
+.markdown-body table,.md-table-wrap>table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%}
+.md-table-wrap{width:100%;max-width:100%;overflow-x:auto;margin:0.8em 0}
+.markdown-body td,.markdown-body th{border:1px solid #ccd6e1;padding:6px 10px;word-break:break-word;overflow-wrap:anywhere}
 .markdown-body th{background:#f1f5f9}
 .markdown-body img{max-width:100%}
 .code-block,.diagram-source{padding:14px 16px;overflow-x:auto;border-radius:8px;background:#202834;color:#e7edf4;font:13px/1.5 Consolas,"Cascadia Code",monospace}
