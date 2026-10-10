@@ -8,6 +8,7 @@
 // ==============================================================================================
 // [요건 이력]
 // WINSIZE-01 / 2026-10-10 / 이미 실행 중인 앱에서 md 파일을 더블클릭해 열어도 현재 창 크기(최대화 포함)를 유지한다.
+// SCROLL-01 / 2026-10-10 / 편집 모드에서 VIEW 모드로 돌아와도 VIEW 스크롤 위치를 맨 위로 되돌리지 않고 유지한다.
 // ==============================================================================================
 
 using System.Diagnostics;
@@ -1649,7 +1650,8 @@ sealed class FileTab : Panel
             if (!value) _splitMode = SplitMode.None;
             _text.ReadOnly = !value || _largeEditorOnly;
             ApplyLayout();
-            RefreshPreview(forceReload: true);
+            // 편집 -> VIEW 전환은 페이지를 다시 로드하지 않고 내용만 갱신해 스크롤 위치를 유지한다.
+            RefreshPreview(forceReload: value);
             if (value)
             {
                 BeginInvoke(() =>

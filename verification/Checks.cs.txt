@@ -108,6 +108,7 @@ internal static class Checks
                 await RunDocWidthMode();
                 await RunTableWrap();
                 await RunWindowSizeKeep();
+                await RunScrollKeep();
                 await RunThemeDirtyState();
                 await RunHomeSample();
         await RunTextAndLargeFile();
@@ -697,6 +698,22 @@ internal static class Checks
                 Brand.DocWidthMode = original;
                 Brand.SaveDocWidth();
             }
+        });
+    }
+
+    static async Task RunScrollKeep()
+    {
+        await TestAsync("SCROLL-01","Leaving edit mode keeps the VIEW scroll position",async()=>
+        {
+            var value=string.Join("\n\n",Enumerable.Range(1,200).Select(i=>"## 제목 "+i+"\n\n본문 줄 "+i));
+            Tab.EditMode=false;Text(value);await Page(value);
+            Tab.EditMode=true;Tab.Split=SplitMode.Vertical;await Task.Delay(800);
+            await JS("window.scrollTo(0,1500)");await Task.Delay(200);
+            var before=(await JS("Math.round(window.scrollY)")).GetInt32();
+            Require(before>500,"Test page did not scroll: "+before);
+            Tab.EditMode=false;await Task.Delay(1000);
+            var after=(await JS("Math.round(window.scrollY)")).GetInt32();
+            Require(after>before/2,"Scroll reset after leaving edit mode: before="+before+" after="+after);
         });
     }
 
