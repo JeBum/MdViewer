@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-10-15 — Release 1.3.3
+
+### 버그 수정 (Fixed)
+- **초기 미리보기 대용량 문서 오류 수정**: 대용량 Markdown/로컬 이미지 문서를 처음 열 때 WebView2 `NavigateToString` 크기 제한으로 `Value does not fall within the expected range.`가 발생하던 문제를 임시 HTML 파일과 가상 호스트 탐색 방식으로 수정.
+- **임시 미리보기 파일 정리**: 탭 종료 시 미리보기용 임시 HTML 파일을 삭제하도록 개선.
+
+### 검증
+- 웹 단위 테스트 6개 통과.
+- 대용량 초기 미리보기 회귀 테스트 `PREVIEW-INIT-01` 통과.
+- `release.bat`로 Windows x64 단일 실행 파일 생성.
+
+---
+
 ## 2026-10-10
 
 ### 버그 수정 (Fixed)

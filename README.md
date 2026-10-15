@@ -60,7 +60,7 @@ PDF 파일은 WebView2의 내장 PDF 뷰어로 열어 읽을 수 있습니다. P
 
 결과: `publish\MDviewer.exe`
 
-현재 배포 버전: [v1.3.2](https://github.com/JeBum/MDviewer/releases/tag/v1.3.2). 릴리즈의 Assets에서 `MDviewer.exe`를 다운로드할 수 있습니다.
+현재 배포 버전: [v1.3.3](https://github.com/JeBum/MDviewer/releases/tag/v1.3.3). 릴리즈의 Assets에서 `MDviewer.exe`를 다운로드할 수 있습니다.
 
 release.bat은 실행 중인 MDviewer를 종료한 뒤 `publish\MDviewer.exe`를 새로 생성합니다. 실행 파일이 계속 잠겨 있으면 별도 폴더를 만들지 않고 오류로 중단합니다. 구형 빌드·설치 스크립트는 저장소에서 제거되었습니다.
 
