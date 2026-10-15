@@ -179,9 +179,10 @@ internal static class Checks
         Test("CALLOUT-01", "Five documented GitHub callout types", () => { foreach (var k in new[] { "NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION" }) Require(Render($"> [!{k}] Title\n> Body").Contains("markdown-alert-" + k.ToLowerInvariant()), k); });
         Test("CALLOUT-02", "Callout containing list remains callout", () => Require(Render("> [!NOTE] Title\n>\n> - item").Contains("markdown-alert-note"), "Nested list prevents callout conversion"));
         Test("CALLOUT-03", "Collapsed callout exposes a toggle", () => { var h = Render("> [!warning]- Folded\n> Body"); Require(h.Contains("<details") || h.Contains("aria-expanded") || h.Contains("<button"), h); });
-        Test("IMAGE-01", "Standalone image gets searchable caption", () => { var h = ImageHtml("![caption](assets/albatross.png)"); Require(h.Contains("<figcaption") && h.Contains("file:///"), h); });
+        Test("IMAGE-01", "Standalone image gets searchable caption", () => { var h = ImageHtml("![caption](assets/albatross.png)"); Require(h.Contains("<figcaption") && h.Contains("data:image/png;base64,"), h); });
         Test("IMAGE-02", "Caption displays special characters once", () => { var h = ImageHtml("![A & B](assets/albatross.png)"); var m = Regex.Match(h, "<figcaption[^>]*>(.*?)</figcaption>"); Equal("A & B", Plain(m.Groups[1].Value)); });
         Test("IMAGE-03", "Inline image caption is searchable", () => Require(ImageHtml("before ![inlinecaption](assets/albatross.png) after").Contains("<figcaption"), "Inline image alt has no visible text node"));
+        Test("IMAGE-04", "AI escaped image syntax renders as an embedded local image", () => { var h = ImageHtml(@"![kTS_S32FlashTool 메인 화면]\(screenshots/main_window\.png)"); Require(h.Contains("<img") && h.Contains("data:image/png;base64,"), h); });
         SetField("_editMode", true); Editor.ReadOnly = false;
         Test("EDIT-01", "Ctrl+B wraps selected text", () => { Text("hello"); Editor.SelectAll(); Key(Keys.Control | Keys.B); Equal("**hello**", Editor.Text); });
         Test("EDIT-02", "Ctrl+I inserts placeholder without selection", () => { Text(""); Key(Keys.Control | Keys.I); Equal("*기울임 텍스트*", Editor.Text); Equal("기울임 텍스트", Editor.SelectedText); });
@@ -196,7 +197,9 @@ internal static class Checks
         Test("FIND-01", "Search is literal and case insensitive", () => { Text("A.b a.b axb"); Equal(2, Tab.GetMatches("a.b", false).Count); });
         Test("FIND-02", "English whole-word source search", () => { Text("cat scatter cat"); Equal(2, Tab.GetMatches("cat", true).Count); });
         Test("FIND-03", "Korean whole-word source search", () => { Text("문서 문서들 문서"); Equal(2, Tab.GetMatches("문서", true).Count); });
+        Test("FIND-04", "Selected search replaces an open search query", () => { Text("old selected"); Tab.ShowFindBar("old"); Editor.Focus(); Editor.Select(4, 8); Tab.SearchSelectedText(); Equal("selected", Field<TextBox>("_txtFind").Text); Require(Field<Panel>("_findBar").Visible, "Search bar was closed"); });
         Test("HL-01", "Keyword toggles add and remove", () => { Field<TextBox>("_txtHl").Text = ""; Tab.ToggleHighlightKeyword("word"); Equal("word", Field<TextBox>("_txtHl").Text); Tab.ToggleHighlightKeyword("word"); Equal("", Field<TextBox>("_txtHl").Text); });
+        Test("HL-02", "Menu highlight adds selected keyword without toggling existing keyword", () => { Field<TextBox>("_txtHl").Text = "existing"; Tab.AddHighlightKeyword("selected"); Equal("existing selected", Field<TextBox>("_txtHl").Text); Tab.AddHighlightKeyword("existing"); Equal("existing selected", Field<TextBox>("_txtHl").Text); });
         Test("TASK-01", "Checkbox changes source and dirty state", () => { typeof(FileTab).GetProperty("Path")!.SetValue(Tab, Path.Combine(Artifacts, "scratch.md")); Text("- [ ] todo"); Call("ToggleTaskAtLine", 1, true); Equal("- [x] todo", Editor.Text); Require(Tab.Dirty, "Dirty is false"); Call("ToggleTaskAtLine", 1, false); Equal("- [ ] todo", Editor.Text); });
         Test("FILE-01", "Save and reload preserve Korean text", () => { Text("# 임시 문서\n\n한글 테스트"); Tab.Save(); Require(!Tab.Dirty, "Save did not clear dirty"); var path = Tab.Path; Equal(Editor.Text, File.ReadAllText(path)); Text("changed"); Tab.Reload(); Equal(File.ReadAllText(path), Editor.Text); });
 
@@ -217,6 +220,14 @@ internal static class Checks
     static async Task RunWeb()
     {
         await TestAsync("WEB-01", "Preview JavaScript loads", async () => { await Page("# Test\n\nBody"); Equal("function", (await JS("typeof findInPage")).GetString()); });
+        await TestAsync("PREVIEW-INIT-01", "Large document initial preview avoids NavigateToString size failure", async () =>
+        {
+            var value = new string('가', 2_200_000) + "\n\n초기 미리보기 끝";
+            Text(value);
+            Tab.RefreshPreview(forceReload: true);
+            await Wait(async () => (await JS("typeof findInPage")).ToString() == "function", 25000);
+            Require((await JS("document.querySelector('.md').textContent.includes('초기 미리보기 끝')")).GetBoolean(), "Large initial preview was not loaded");
+        });
         await TestAsync("WEB-02", "Substring find highlights three matches", async () => { await Page("cat scatter cat"); Equal(3, (await JS("findInPage('cat',false,0)")).GetInt32()); });
         await TestAsync("WEB-03", "Whole-word preview matches source count", async () => { await Page("cat scatter cat"); Equal(2, (await JS("findInPage('cat',true,0)")).GetInt32()); });
         await TestAsync("WEB-04", "Korean whole-word preview matches source count", async () => { await Page("문서 문서들 문서"); Equal(2, (await JS("findInPage('문서',true,0)")).GetInt32()); });
@@ -226,6 +237,12 @@ internal static class Checks
         await TestAsync("WEB-08", "JSON copy produces parseable JSON", async () => { await Page("```json\n{\"a\":1,\"b\":true}\n```"); var c = await JS("(()=>{window.__copied=null;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:t=>{window.__copied=t;return Promise.resolve();}}});copyCode(document.querySelector('.copy-code-btn'));return window.__copied;})()"); File.WriteAllText(Path.Combine(Artifacts, "copied-json.txt"), c.GetString()!); using var json = JsonDocument.Parse(c.GetString()!); Equal(1, json.RootElement.GetProperty("a").GetInt32()); });
         await TestAsync("WEB-09", "Caption punctuation displays correctly", async () => { await Page("![A & B](assets/albatross.png)", true); Equal("A & B", (await JS("document.querySelector('figcaption').textContent")).GetString()); });
         await TestAsync("WEB-10", "Image caption can be searched", async () => { await Page("![caption](assets/albatross.png)", true); Equal(1, (await JS("findInPage('caption',false,0)")).GetInt32()); });
+        await TestAsync("WEB-10A", "Relative local image is actually decoded by WebView2", async () =>
+        {
+            await Page("![local](assets/albatross.png)", true);
+            await Wait(async () => (await JS("(()=>{const i=document.querySelector('.md img');return !!i&&i.complete&&i.naturalWidth>0;})()")).GetBoolean(), 5000);
+            Require((await JS("document.querySelector('.md img').naturalWidth")).GetInt32() > 0, "Local image did not decode");
+        });
         await TestAsync("WEB-11", "Keyword highlighting excludes code line numbers", async () => { await Page("```text\nvalue 1\n```"); await JS("(applyHighlightKeywords(['1']),true)"); Equal(0, (await JS("document.querySelectorAll('.line-num .md-kw-hl').length")).GetInt32()); });
         await TestAsync("WEB-12", "Math dollar and parenthesis delimiters", async () => { await Page("$E=mc^2$\n\n\\(x^2\\)\n\n$$x^2$$\n\n\\[x^2\\]"); await Wait(async () => (await JS("typeof renderMathInElement")).ToString() == "function", 12000); await JS("(renderMath(),true)"); Equal(4, (await JS("document.querySelectorAll('.katex').length")).GetInt32()); });
         await TestAsync("WEB-13", "Invalid math preserves visible error source", async () => { await Page("$\\invalidcommand{x}$"); await JS("(renderMath(),true)"); File.WriteAllText(Path.Combine(Artifacts, "invalid-math.html"), (await JS("document.querySelector('.md').innerHTML")).ToString()); Require((await JS("Array.from(document.querySelectorAll('.md *')).some(e=>/rgb\\(\\d+, 0, 0\\)/.test(getComputedStyle(e).color))")).GetBoolean(), "No red error text"); Require((await JS("document.querySelector('.md').textContent")).ToString().Contains("invalidcommand"), "Source lost"); });
@@ -282,6 +299,35 @@ internal static class Checks
             Test("APP-09", "Ctrl+N and Ctrl+W create and close blank tab", () => { typeof(Control).GetMethod("OnKeyDown", Flags)!.Invoke(main, new object[] { new KeyEventArgs(Keys.Control | Keys.N) }); Equal(4, main.GetAllTabs().Count); typeof(Control).GetMethod("OnKeyDown", Flags)!.Invoke(main, new object[] { new KeyEventArgs(Keys.Control | Keys.W) }); Equal(3, main.GetAllTabs().Count); });
             Test("APP-10", "Close other documents keeps selected tab", () => { main.SelectTabByIndex(0); typeof(MainForm).GetMethod("CloseOthers", Flags)!.Invoke(main, new object[] { tabs[0].HostPage! }); Equal(1, main.GetAllTabs().Count); Equal(paths[0], main.GetAllTabs()[0].Path); });
             Test("APP-11", "Close all returns to empty tabs", () => { typeof(MainForm).GetMethod("CloseAll", Flags)!.Invoke(main, null); Equal(0, main.GetAllTabs().Count); });
+            Test("MENU-COPY-01", "복사는 편집기에서 선택한 텍스트를 클립보드에 넣는다", () => {
+                foreach (var p in paths) main.OpenFile(p);
+                main.SelectTabByIndex(0);
+                Tab = main.GetAllTabs()[0];
+                Editor = Field<RichTextBox>("_text");
+                Tab.EditMode = true;
+                Editor.Text = "copy target";
+                Editor.Select(0, 4);
+                main.ShowDocMenu(Editor);
+                var menu = (ContextMenuStrip)typeof(MainForm).GetField("_menu", Flags)!.GetValue(main)!;
+                var copy = (ToolStripMenuItem)typeof(MainForm).GetField("_miCopy", Flags)!.GetValue(main)!;
+                Require(copy.Enabled, "Copy was disabled with selected text");
+                copy.PerformClick();
+                Equal("copy", Clipboard.GetText());
+                var paste = (ToolStripMenuItem)typeof(MainForm).GetField("_miPaste", Flags)!.GetValue(main)!;
+                Editor.Select(Editor.TextLength, 0);
+                Clipboard.SetText(" pasted");
+                main.ShowDocMenu(Editor);
+                Require(paste.Enabled, "Paste was disabled in edit mode");
+                paste.PerformClick();
+                Equal("copy target pasted", Editor.Text);
+                menu.Close();
+                Tab.EditMode = false;
+                Editor.Select(0, 0);
+                main.ShowDocMenu(Tab);
+                Require(!copy.Enabled, "Copy was enabled without selected text");
+                Require(!paste.Enabled, "Paste was enabled outside edit mode");
+                menu.Close();
+            });
             await Task.Delay(200);
         }
         finally { foreach (var t in main.GetAllTabs()) { t.DisposeWatch(); t.Dispose(); } main.Close(); Tab = originalTab; Editor = originalEditor; }
@@ -290,6 +336,35 @@ internal static class Checks
     {
         const string doc = "# 현재 편집 위치\n\n첫 번째 문단입니다.\n\n여기를 편집하고 있습니다.\n\n다음 문단입니다.";
         await TestAsync("CURSOR-01", "Viewer starts without a current-line marker", async () => { await Page(doc); Require((await JS("!document.getElementById('md-cursor-indicator') || document.getElementById('md-cursor-indicator').hidden")).GetBoolean(), "Marker visible in viewer mode"); });
+        await TestAsync("EDIT-SCROLL-01", "Entering edit mode preserves the VIEW scroll position", async () =>
+        {
+            var longDoc = string.Join("\n\n", Enumerable.Range(1, 90).Select(i => $"스크롤 위치 유지 테스트 문단 {i:D2}입니다."));
+            Tab.EditMode = false;
+            Tab.Split = SplitMode.None;
+            await Page(longDoc);
+            await JS("(window.scrollTo(0,Math.min(360,document.documentElement.scrollHeight-window.innerHeight)),true)");
+            await Task.Delay(120);
+            var before = (await JS("window.scrollY")).GetDouble();
+            Require(before > 0, "VIEW did not scroll before edit mode");
+            Text(longDoc);
+            Editor.Select(Editor.GetFirstCharIndexFromLine(40), 0);
+            Editor.ScrollToCaret();
+            var editorBefore = (int)typeof(Native).GetMethod("EditorFirstLine", Flags)!.Invoke(null, new object[] { Editor })!;
+            Tab.EditMode = true;
+            Tab.Split = SplitMode.Vertical;
+            var samples = new List<string>();
+            for (var i = 0; i < 12; i++)
+            {
+                await Task.Delay(300);
+                samples.Add((await JS("`${window.scrollY}|${document.scrollingElement?.scrollTop}|${document.querySelector('.md')?.scrollTop}|${document.body.className}|${window.__mdPreserveEditScroll}`")).GetString()!);
+            }
+            var after = (await JS("window.scrollY")).GetDouble();
+            var saved = await JS("window.__mdEditScrollY");
+            Require(Math.Abs(after - before) < 8, $"VIEW scroll changed on edit entry: before={before}, after={after}, saved={saved}, samples={string.Join(',', samples)}");
+            var editorAfter = (int)typeof(Native).GetMethod("EditorFirstLine", Flags)!.Invoke(null, new object[] { Editor })!;
+            Require(Math.Abs(editorAfter - editorBefore) <= 1, $"Editor scroll changed on edit entry: before={editorBefore}, after={editorAfter}");
+            Tab.EditMode = false;
+        });
         await TestAsync("CURSOR-02", "Triangle in a dedicated rail without block highlight", async () =>
         {
             await Page(doc);

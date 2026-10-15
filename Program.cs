@@ -179,6 +179,8 @@ sealed class MainForm : Form, IMessageFilter
     ToolStripMenuItem? _miClose;
     ToolStripMenuItem? _miCloseAll;
     ToolStripMenuItem? _miCloseOthers;
+    ToolStripMenuItem? _miCopy;
+    ToolStripMenuItem? _miPaste;
     ToolStripMenuItem? _miFind;
     ToolStripMenuItem? _miHighlight;
     ToolStripMenuItem? _miEdit;
@@ -196,6 +198,8 @@ sealed class MainForm : Form, IMessageFilter
     ToolStripMenuItem? _miWidthWide;
     ToolStripMenuItem? _miWidthFull;
     bool _menuBusy;
+    string _contextCopyText = "";
+    Control? _contextSource;
     readonly TabControl _tabs = new()
     {
         Dock = DockStyle.Fill,
@@ -347,7 +351,8 @@ sealed class MainForm : Form, IMessageFilter
 
         if (m.Msg == WmContextMenu && Current != null)
         {
-            ShowDocMenu(this);
+            // 요구사항: 편집기에서 열린 메뉴는 실제 RichTextBox 선택 영역을 기준으로 동작한다.
+            ShowDocMenu(Control.FromHandle(m.HWnd) ?? this);
             return true;
         }
         if (m.Msg != WmMouseWheel && m.Msg != WmMouseHWheel) return false;
@@ -784,13 +789,16 @@ sealed class MainForm : Form, IMessageFilter
         _menu.Items.Add(_miCloseAll);
         _menu.Items.Add(_miCloseOthers);
         _menu.Items.Add(new ToolStripSeparator());
-        _miFind = new ToolStripMenuItem("검색 (Ctrl+F)", null, (_, _) => Current?.ToggleFindBar());
-        _miHighlight = new ToolStripMenuItem("강조 키워드 (Ctrl+F8)") { CheckOnClick = true };
-        _miHighlight.CheckedChanged += (_, _) =>
-        {
-            if (_menuBusy || Current == null) return;
-            Current.HighlightBarVisible = _miHighlight.Checked;
-        };
+        // 요구사항: 오른쪽 클릭 메뉴에서 선택 텍스트를 복사하고, 선택이 없으면 복사를 비활성화한다.
+        _miCopy = new ToolStripMenuItem("복사", null, (_, _) => CopyContextSelection());
+        _menu.Items.Add(_miCopy);
+        // 요구사항: 편집 모드의 편집기에서만 클립보드 텍스트를 붙여넣을 수 있게 한다.
+        _miPaste = new ToolStripMenuItem("붙이기", null, (_, _) => PasteContextSelection());
+        _menu.Items.Add(_miPaste);
+        // 요구사항: 선택 후 검색은 검색창의 기존 단어를 선택어로 교체하고, 강조는 기존 키워드에 선택어를 추가한다.
+        _miFind = new ToolStripMenuItem("검색 (Ctrl+F)", null, (_, _) => Current?.SearchSelectedText(_contextCopyText));
+        _miHighlight = new ToolStripMenuItem("강조 키워드 (Ctrl+F8)");
+        _miHighlight.Click += (_, _) => Current?.ApplyHighlightMenuAction(_contextCopyText);
         _menu.Items.Add(_miFind);
         _menu.Items.Add(_miHighlight);
         _menu.Items.Add(new ToolStripSeparator());
@@ -922,6 +930,8 @@ sealed class MainForm : Form, IMessageFilter
             if (_miClose != null) _miClose.Enabled = has;
             if (_miCloseAll != null) _miCloseAll.Enabled = _tabs.TabCount > 0;
             if (_miCloseOthers != null) _miCloseOthers.Enabled = has && _tabs.TabCount > 1;
+            if (_miCopy != null) _miCopy.Enabled = _contextCopyText.Length > 0;
+            if (_miPaste != null) _miPaste.Enabled = Current?.CanPasteContextSelection(_contextSource) == true;
             if (_miFind != null) _miFind.Enabled = has;
             if (_miHighlight != null)
             {
@@ -1167,8 +1177,23 @@ sealed class MainForm : Form, IMessageFilter
     public bool IsMenuVisible => _menu.Visible;
     public void CloseMenu() => _menu.Close();
 
-    public void ShowDocMenu(Control c)
+    void CopyContextSelection()
     {
+        if (_contextCopyText.Length == 0) return;
+        try { Clipboard.SetText(_contextCopyText); }
+        catch { }
+    }
+
+    void PasteContextSelection()
+    {
+        if (_contextSource == null || Current == null) return;
+        Current.PasteContextSelection(_contextSource);
+    }
+
+    public async void ShowDocMenu(Control c)
+    {
+        _contextSource = c;
+        _contextCopyText = Current == null ? "" : await Current.GetSelectedTextForCopy(c);
         _menu.Show(c, c.PointToClient(Cursor.Position));
     }
 
@@ -1575,12 +1600,16 @@ sealed class FileTab : Panel
     readonly System.Windows.Forms.Timer _previewLineFadeTimer = new() { Interval = 25 };
     readonly System.Windows.Forms.Timer _osdEditTimer = new() { Interval = 1100 };
     bool _syncing;
+    bool _preserveViewScrollOnEditEntry;
+    int _preserveEditorFirstLineOnEditEntry = -1;
     DateTime _previewLineFadeStartedUtc;
     SplitMode _splitMode = SplitMode.None;
     bool _ready;
     bool _dirty;
     bool _suspendWatch;
     string _loaded = "";
+    string? _previewDocumentPath;
+    string? _previewDocumentPath2;
     const long LargeFileThresholdBytes = 100L * 1024 * 1024;
     const int LargeFileTailBytes = 50 * 1024 * 1024;
     const int LargeFileChunkChars = 1_000_000;
@@ -1646,18 +1675,46 @@ sealed class FileTab : Panel
                 return;
             }
             if (_largeEditorOnly && !value) return;
+            // 요구사항: VIEW에서 편집 모드로 들어갈 때 현재 VIEW 스크롤 위치를 유지한다.
+            var enteringEditMode = value && !_editMode;
+            if (enteringEditMode)
+            {
+                _preserveViewScrollOnEditEntry = true;
+                // 요구사항: 편집 모드 진입 시 왼쪽 편집기의 현재 세로 위치도 최상단으로 이동하지 않게 유지한다.
+                _preserveEditorFirstLineOnEditEntry = Native.EditorFirstLine(_text);
+                if (_web.CoreWebView2 != null)
+                    _ = _web.ExecuteScriptAsync("window.__mdEditScrollY=window.scrollY;window.__mdPreserveEditScroll=true;document.body.classList.add('md-edit-position');");
+            }
             _editMode = value;
-            if (!value) _splitMode = SplitMode.None;
+            if (!value)
+            {
+                _splitMode = SplitMode.None;
+                _preserveViewScrollOnEditEntry = false;
+                _preserveEditorFirstLineOnEditEntry = -1;
+            }
             _text.ReadOnly = !value || _largeEditorOnly;
             ApplyLayout();
-            // 편집 -> VIEW 전환은 페이지를 다시 로드하지 않고 내용만 갱신해 스크롤 위치를 유지한다.
-            RefreshPreview(forceReload: value);
+            // 요구사항: 편집 모드 진입 시 VIEW를 재탐색하지 않고 갱신하여 마지막 스크롤 위치를 유지한다.
+            RefreshPreview(preserveScroll: enteringEditMode || _preserveViewScrollOnEditEntry);
             if (value)
             {
-                BeginInvoke(() =>
+                BeginInvoke(async () =>
                 {
                     _text.Focus();
-                    SyncCursorToWeb();
+                    if (enteringEditMode && _preserveEditorFirstLineOnEditEntry >= 0)
+                        Native.SetEditorFirstLine(_text, _preserveEditorFirstLineOnEditEntry);
+                    if (enteringEditMode && _web.CoreWebView2 != null)
+                    {
+                        // 요구사항: 비동기 레이아웃/이미지 렌더링이 끝날 때까지 VIEW 스크롤 위치를 보호한다.
+                        for (var attempt = 0; attempt < 16; attempt++)
+                        {
+                            await Task.Delay(attempt == 0 ? 120 : 200);
+                            await _web.ExecuteScriptAsync("if(typeof window.__mdEditScrollY==='number')window.scrollTo(0,window.__mdEditScrollY);");
+                        }
+                        await _web.ExecuteScriptAsync("window.__mdPreserveEditScroll=false;");
+                    }
+                    _preserveViewScrollOnEditEntry = false;
+                    _preserveEditorFirstLineOnEditEntry = -1;
                 });
             }
             else
@@ -1677,7 +1734,8 @@ sealed class FileTab : Panel
         {
             _splitMode = value;
             ApplyLayout();
-            RefreshPreview();
+            // 요구사항: 편집 모드 진입 직후 세로 분할을 만들 때도 VIEW의 현재 스크롤 위치를 유지한다.
+            RefreshPreview(preserveScroll: _editMode || _preserveViewScrollOnEditEntry);
         }
     }
 
@@ -2136,8 +2194,10 @@ sealed class FileTab : Panel
             var dataDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "MdView", "wv2");
             Directory.CreateDirectory(dataDir);
             var env = await CoreWebView2Environment.CreateAsync(null, dataDir);
-            await InitOneWeb(_web, env);
-            await InitOneWeb(_web2, env);
+            var previewDir = System.IO.Path.Combine(dataDir, "preview");
+            Directory.CreateDirectory(previewDir);
+            await InitOneWeb(_web, env, previewDir);
+            await InitOneWeb(_web2, env, previewDir);
             HookWebDrop(_web);
             HookWebDrop(_web2);
             _ready = true;
@@ -2149,7 +2209,7 @@ sealed class FileTab : Panel
         }
     }
 
-    static async Task InitOneWeb(WebView2 web, CoreWebView2Environment env)
+    static async Task InitOneWeb(WebView2 web, CoreWebView2Environment env, string previewDir)
     {
         await web.EnsureCoreWebView2Async(env);
         if (!string.IsNullOrEmpty(Brand.AssetDir))
@@ -2158,6 +2218,10 @@ sealed class FileTab : Panel
                 "mdviewer.local", Brand.AssetDir,
                 CoreWebView2HostResourceAccessKind.Allow);
         }
+        // 요구사항: 큰 문서도 초기 VIEW에서 NavigateToString 크기 제한으로 실패하지 않게 한다.
+        web.CoreWebView2.SetVirtualHostNameToFolderMapping(
+            "mdviewer-content.local", previewDir,
+            CoreWebView2HostResourceAccessKind.Allow);
         web.AllowExternalDrop = true;
         web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         web.CoreWebView2.Settings.AreDevToolsEnabled = false;
@@ -2219,6 +2283,7 @@ sealed class FileTab : Panel
                 e.Uri.StartsWith("about:blank#", StringComparison.OrdinalIgnoreCase) ||
                 e.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
                 e.Uri.StartsWith("https://mdviewer.local/", StringComparison.OrdinalIgnoreCase) ||
+                e.Uri.StartsWith("https://mdviewer-content.local/", StringComparison.OrdinalIgnoreCase) ||
                 (!string.IsNullOrEmpty(browserUri) && e.Uri.StartsWith(browserUri, StringComparison.OrdinalIgnoreCase)))
                 return;
 
@@ -2552,7 +2617,7 @@ sealed class FileTab : Panel
 
     void SyncCursorToWeb()
     {
-        if (_syncing || !_ready || !_editMode || _web.CoreWebView2 == null) return;
+        if (_syncing || _preserveViewScrollOnEditEntry || !_ready || !_editMode || _web.CoreWebView2 == null) return;
         try
         {
             int charIndex = _text.SelectionStart;
@@ -2572,7 +2637,7 @@ sealed class FileTab : Panel
 
     void SyncEditorToWeb()
     {
-        if (_syncing || !_ready || !_editMode || _web.CoreWebView2 == null) return;
+        if (_syncing || _preserveViewScrollOnEditEntry || !_ready || !_editMode || _web.CoreWebView2 == null) return;
         _syncing = true;
         try
         {
@@ -2794,6 +2859,43 @@ sealed class FileTab : Panel
         return true;
     }
 
+    async Task<string> ReadActiveSelection()
+    {
+        if (_text.Focused && !string.IsNullOrWhiteSpace(_text.SelectedText))
+            return _text.SelectedText;
+        var sel = await ReadWebSelection(_web);
+        if (string.IsNullOrEmpty(sel)) sel = await ReadWebSelection(_web2);
+        if (!string.IsNullOrEmpty(sel)) return sel;
+        return _text.SelectedText;
+    }
+
+    public async Task<string> GetSelectedTextForCopy(Control source)
+    {
+        if (source is RichTextBox editor)
+            return editor.SelectedText.Trim();
+        if (source is WebView2 web)
+            return await ReadWebSelection(web);
+        return await ReadActiveSelection();
+    }
+
+    public bool CanPasteContextSelection(Control? source)
+    {
+        if (!_editMode || _text.ReadOnly || source is not RichTextBox) return false;
+        try { return Clipboard.ContainsText(); }
+        catch { return false; }
+    }
+
+    public void PasteContextSelection(Control source)
+    {
+        if (!CanPasteContextSelection(source)) return;
+        try
+        {
+            _text.Focus();
+            _text.Paste();
+        }
+        catch { }
+    }
+
     async Task<string> ReadWebSelection(WebView2 web)
     {
         if (web.CoreWebView2 == null) return "";
@@ -2840,7 +2942,18 @@ sealed class FileTab : Panel
             ToggleHighlightKeyword(_text.SelectedText.Trim());
     }
 
-    public void AddSelectedToHighlight() => ToggleSelectedHighlight();
+    public async void ApplyHighlightMenuAction(string? selectedText = null)
+    {
+        var sel = (selectedText ?? await ReadActiveSelection()).Trim();
+        if (sel.Length > 0)
+        {
+            AddHighlightKeyword(sel);
+            return;
+        }
+        HighlightBarVisible = !HighlightBarVisible;
+    }
+
+    public void AddSelectedToHighlight() => ApplyHighlightMenuAction();
 
     public void ToggleHighlightKeyword(string word)
     {
@@ -2870,7 +2983,25 @@ sealed class FileTab : Panel
         ApplyHighlightKeywords();
     }
 
-    public void AddHighlightKeyword(string word) => ToggleHighlightKeyword(word);
+    public void AddHighlightKeyword(string word)
+    {
+        if (string.IsNullOrWhiteSpace(word)) return;
+        word = word.Trim();
+        var current = _txtHl.Text.Trim();
+        var existing = current.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        if (existing.Any(x => string.Equals(x, word, StringComparison.OrdinalIgnoreCase)))
+        {
+            _hlBar.Visible = true;
+            return;
+        }
+        existing.Add(word);
+        _txtHl.Text = string.Join(" ", existing);
+        _hlBar.Visible = true;
+        _txtHl.Focus();
+        _txtHl.SelectionStart = _txtHl.TextLength;
+        _txtHl.SelectionLength = 0;
+        ApplyHighlightKeywords();
+    }
 
     MainForm? Main => FindForm() as MainForm;
 
@@ -2892,6 +3023,17 @@ sealed class FileTab : Panel
         {
             ShowFindBar(initialText);
         }
+    }
+
+    public async void SearchSelectedText(string? selectedText = null)
+    {
+        var sel = (selectedText ?? await ReadActiveSelection()).Trim();
+        if (sel.Length > 0)
+        {
+            ShowFindBar(sel);
+            return;
+        }
+        ToggleFindBar();
     }
 
     public void ShowFindBar(string? initialText = null, bool? wholeWord = null, bool? allTabs = null)
@@ -3228,6 +3370,9 @@ sealed class FileTab : Panel
 
     public void DisposeWatch()
     {
+        // 요구사항: 미리보기 임시 문서는 탭 종료 시 남기지 않는다.
+        if (!string.IsNullOrEmpty(_previewDocumentPath)) TryDeletePreviewDocument(_previewDocumentPath);
+        if (!string.IsNullOrEmpty(_previewDocumentPath2)) TryDeletePreviewDocument(_previewDocumentPath2);
         _previewTick.Stop();
         _previewTick.Dispose();
         _previewLineFadeTimer.Stop();
@@ -3680,7 +3825,40 @@ sealed class FileTab : Panel
         web.CoreWebView2.Navigate(new Uri(System.IO.Path.GetFullPath(Path)).AbsoluteUri);
     }
 
-    public void RefreshPreview(bool forceReload = false)
+    void NavigatePreviewDocument(WebView2 web, string html)
+    {
+        if (web.CoreWebView2 == null) return;
+
+        // 요구사항: 미리보기 HTML 전체를 NavigateToString에 넘기지 않고 파일로 탐색하여
+        // 큰 Markdown/이미지 문서에서도 초기 렌더링 오류를 방지한다.
+        var fileName = "preview-" + Guid.NewGuid().ToString("N") + ".html";
+        var documentPath = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "MdView", "wv2", "preview", fileName);
+        File.WriteAllText(documentPath, html, new System.Text.UTF8Encoding(false));
+
+        if (web == _web)
+        {
+            if (!string.IsNullOrEmpty(_previewDocumentPath))
+                TryDeletePreviewDocument(_previewDocumentPath);
+            _previewDocumentPath = documentPath;
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(_previewDocumentPath2))
+                TryDeletePreviewDocument(_previewDocumentPath2);
+            _previewDocumentPath2 = documentPath;
+        }
+
+        web.CoreWebView2.Navigate("https://mdviewer-content.local/" + fileName);
+    }
+
+    static void TryDeletePreviewDocument(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch { }
+    }
+
+    public void RefreshPreview(bool forceReload = false, bool preserveScroll = false)
     {
         if (!_ready) return;
         if (IsBrowserDocument)
@@ -3703,14 +3881,14 @@ sealed class FileTab : Panel
             if (!forceReload && _web.CoreWebView2 != null)
             {
                 var jsonHtml = System.Text.Json.JsonSerializer.Serialize(html);
-                int targetLine = _editMode ? normCursor : 0;
+                int targetLine = _editMode && !preserveScroll ? normCursor : 0;
                 var js = "updatePreviewContent(" + jsonHtml + ", " + targetLine + ", " + normTotal + ");";
                 _ = _web.CoreWebView2.ExecuteScriptAsync(js);
             }
             else
             {
                 var doc = WrapHtml(html);
-                if (_web.CoreWebView2 != null) _web.CoreWebView2.NavigateToString(doc);
+                NavigatePreviewDocument(_web, doc);
             }
 
             if (_web2.CoreWebView2 != null)
@@ -3724,7 +3902,7 @@ sealed class FileTab : Panel
                 else
                 {
                     var doc = WrapHtml(html);
-                    _web2.CoreWebView2.NavigateToString(doc);
+                    NavigatePreviewDocument(_web2, doc);
                 }
             }
             BeginInvoke(() =>
@@ -3801,9 +3979,27 @@ sealed class FileTab : Panel
             """(?i)(<img\b[^>]*?\bsrc\s*=\s*["'])(?!https?:|data:|file:)([^"']+)(["'])""",
             m =>
             {
-                var rel = m.Groups[2].Value.Replace('/', System.IO.Path.DirectorySeparatorChar);
-                var full = System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, rel));
-                return m.Groups[1].Value + new Uri(full).AbsoluteUri + m.Groups[3].Value;
+                // 요구사항: NavigateToString으로 렌더링한 Markdown에서도 VS Code처럼 상대 경로 이미지를 출력한다.
+                // WebView2의 about:blank 문서에서는 file:/// 리소스가 차단될 수 있으므로 로컬 파일을 data URI로 내장한다.
+                var source = m.Groups[2].Value;
+                var pathPart = source;
+                var suffix = "";
+                var split = source.IndexOfAny(new[] { '?', '#' });
+                if (split >= 0)
+                {
+                    pathPart = source[..split];
+                    suffix = source[split..];
+                }
+                pathPart = Uri.UnescapeDataString(pathPart).Replace('/', System.IO.Path.DirectorySeparatorChar);
+                var full = System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, pathPart));
+                if (!File.Exists(full)) return m.Value;
+                try
+                {
+                    var mime = GetImageMimeType(full);
+                    var encoded = Convert.ToBase64String(File.ReadAllBytes(full));
+                    return m.Groups[1].Value + $"data:{mime};base64,{encoded}" + suffix + m.Groups[3].Value;
+                }
+                catch { return m.Value; }
             });
 
         html = Regex.Replace(
@@ -3820,6 +4016,18 @@ sealed class FileTab : Panel
 
         return html;
     }
+
+    static string GetImageMimeType(string path) => System.IO.Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".png" => "image/png",
+        ".gif" => "image/gif",
+        ".webp" => "image/webp",
+        ".bmp" => "image/bmp",
+        ".svg" => "image/svg+xml",
+        ".ico" => "image/x-icon",
+        _ => "application/octet-stream"
+    };
 
     string RenderTextHtml(string src)
     {
@@ -4132,6 +4340,12 @@ sealed class FileTab : Panel
     {
         if (string.IsNullOrEmpty(src)) return src;
         src = src.Replace("\r\n", "\n").Replace('\r', '\n');
+        // 요구사항: AI가 생성한 ![설명]\(images/file\.png) 표기도 일반 Markdown 이미지로 표시한다.
+        src = Regex.Replace(src, @"!\[([^\r\n\]]*)\]\\\(([^)\r\n]+)\)", m =>
+        {
+            var destination = Regex.Replace(m.Groups[2].Value, @"\\([.!#$%&'()*+,/:;<=>?@\[\]^_`{|}~-])", "$1");
+            return "![" + m.Groups[1].Value + "](" + destination + ")";
+        });
         src = Regex.Replace(src, @"(?<!\\)\\\(([\s\S]*?)(?<!\\)\\\)", @"\\($1\\)");
         src = Regex.Replace(src, @"(?<!\\)\\\[([\s\S]*?)(?<!\\)\\\]", @"\\[$1\\]");
         var lines = src.Split('\n');
@@ -4460,7 +4674,7 @@ sealed class FileTab : Panel
         "renderMermaid();" +
         "if(Array.isArray(__lastKeywords)&&__lastKeywords.length>0){applyHighlightKeywords(__lastKeywords);}" +
         "if(cursorLine&&cursorLine>0){scrollToCursorLine(cursorLine,totalLines);}" +
-        "else{clearCursorHighlight();window.scrollTo(0,prevY);}" +
+        "else{if(!window.__mdPreserveEditScroll)clearCursorHighlight();window.scrollTo(0,prevY);}" +
         "}}" +
         // 실제 사용자의 일반 왼쪽 클릭만 편집 위치 이동으로 해석한다.
         // 링크/버튼/체크박스, 드래그 선택, 스크립트 click()은 각자의 동작을 유지한다.
@@ -4475,7 +4689,7 @@ sealed class FileTab : Panel
         "if(ln>0)chrome.webview.postMessage(JSON.stringify({t:'clickLine',ln:ln,userInitiated:true}));" +
         "});" +
         // 이미지 로드나 레이아웃 갱신으로 발생한 scroll 이벤트도 미리보기 안에서만 처리한다.
-        "window.addEventListener('scroll',updateCursorIndicator);" +
+        "window.addEventListener('scroll',()=>{if(window.__mdPreserveEditScroll&&typeof window.__mdEditScrollY==='number'&&Math.abs(window.scrollY-window.__mdEditScrollY)>1)window.scrollTo(0,window.__mdEditScrollY);updateCursorIndicator();});" +
         "window.addEventListener('pointerdown',e=>{chrome.webview.postMessage(JSON.stringify({t:'pointerdown'}));},true);" +
         "window.addEventListener('contextmenu',e=>{e.preventDefault();chrome.webview.postMessage(JSON.stringify({t:'ctx'}));});" +
         "function showZoomOsd(pct){" +
