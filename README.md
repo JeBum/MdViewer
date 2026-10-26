@@ -12,6 +12,8 @@ MDviewer는 Windows에서 Markdown 문서를 편집하고, 실시간으로 보�
 
 현재 소스·로컬 빌드 버전: **1.3.8** (2026-10-26). 변경 내역은 [History.md](History.md)를 참조하세요.
 
+**Windows x64 다운로드:** [MDviewer.exe — v1.3.8](https://github.com/JeBum/MdViewer/releases/download/v1.3.8/MDviewer.exe) · [릴리스 노트](https://github.com/JeBum/MdViewer/releases/tag/v1.3.8)
+
 별도 웹 뷰어는 [web/README.md](web/README.md)에 설치·실행 방법이 있습니다. 외부 서버 연동은 사용하지 않습니다. Windows 앱은 Mermaid만 내장 렌더링하고 PlantUML·Graphviz/DOT·ZenUML·Kroki는 일반 코드 블록으로 표시합니다.
 
 ## 파일 형식 지원
@@ -102,7 +104,7 @@ PDF 파일은 WebView2의 내장 PDF 뷰어로 열어 읽을 수 있습니다. P
 
 결과: `publish\MDviewer.exe`
 
-공개 실행 파일은 [GitHub Releases](https://github.com/JeBum/MDviewer/releases)의 Assets에서 확인할 수 있습니다. 현재 소스의 빌드 결과는 `publish\MDviewer.exe`이며 버전은 **1.3.8**입니다.
+공개 배포 버전은 [v1.3.8](https://github.com/JeBum/MdViewer/releases/tag/v1.3.8)이며 Assets에서 `MDviewer.exe`를 다운로드할 수 있습니다. 파일 버전은 **1.3.8.0**입니다. 현재 소스의 로컬 빌드 결과는 `publish\MDviewer.exe`입니다. 배포 파일의 SHA256과 소스 커밋은 [GitHub Release 검증 기록](verification/GITHUB-RELEASE-RESULTS.md)을 참조하세요.
 
 release.bat은 실행 중인 MDviewer를 종료한 뒤 `publish\MDviewer.exe`를 새로 생성합니다. 실행 파일이 계속 잠겨 있으면 별도 폴더를 만들지 않고 오류로 중단합니다. 구형 빌드·설치 스크립트는 저장소에서 제거되었습니다.
 

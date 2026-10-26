@@ -12,6 +12,7 @@
 - TOOLBAR-10 추가: 일반/최소 창 크기와 창 이동에서 하단 중앙·툴팁 영역 분리 검사.
 - 관련 검사 15개 통과. 전체 149 통과/29 기존 실패(기준 실행과 동일). `RELEASE.BAT` 성공 및 실행 파일 1.3.8.0 확인. 상세 결과: `verification/TOOLBAR-NOTICE-POSITION-RESULTS.md`.
 - Git 등록 범위: 1.3.4~1.3.8의 인쇄·화면 레이아웃·상단 툴바·페이드 안내 소스와 테스트/검증 기록을 함께 등록. README의 최신 버전·툴바 이미지·문서 폭·인쇄 설정·단축키·샘플 이름·검증 안내를 현재 구현에 맞춰 동기화.
+- GitHub 공개 배포: [v1.3.8 Release](https://github.com/JeBum/MdViewer/releases/tag/v1.3.8)에 `MDviewer.exe` 등록. 태그 소스 `cc3a943`에서 다시 빌드하여 파일 버전 1.3.8.0과 제품 버전의 커밋 일치를 확인. GitHub 자산 크기·SHA256 검증 완료. 상세 결과: `verification/GITHUB-RELEASE-RESULTS.md`.
 
 ---
 
