@@ -78,6 +78,11 @@ internal static class Checks
     static int Main(string[] args)
     {
         Root = args[0];
+        // 실행 중인 앱의 메모리 매핑 글꼴/미리보기 파일과 충돌하지 않게 테스트 임시 자원을 격리한다.
+        var isolatedTemp=Path.Combine(Root,"obj","verification","temp-"+Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(isolatedTemp);
+        Environment.SetEnvironmentVariable("TMP",isolatedTemp);
+        Environment.SetEnvironmentVariable("TEMP",isolatedTemp);
         bool cursorOnly = args.Contains("--cursor");
         Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER",Path.Combine(Root,"obj","verification","wv2"));
         Artifacts = Path.Combine(Root, "verification", cursorOnly ? "cursor-artifacts" : "artifacts");
@@ -94,10 +99,12 @@ internal static class Checks
                 if(args.Contains("--native")) { await RunThemeDirtyState(); await RunHomeSample(); await RunTextAndLargeFile(); return; }
                 Tab = new FileTab(null);
                 Editor = Field<RichTextBox>("_text");
-                if (!cursorOnly) RunLogic();
+                if (!cursorOnly && !args.Contains("--print") && !args.Contains("--toolbar")) RunLogic();
                 Host.Controls.Add(Tab);
                 Web = Field<WebView2>("_web");
                 await Wait(() => Task.FromResult(Field<bool>("_ready")), 20000);
+                if(args.Contains("--toolbar")){await RunToolbar();await RunLayoutPrinting();await RunHomeThemeLine();return;}
+                if(args.Contains("--print")){await RunWindowSizeKeep();await RunDocWidthMode();await RunTableWrap();await RunPrinting();await RunLayoutPrinting();await RunHomeSample();return;}
                 if(args.Contains("--editor")){await RunEditorIsolation();return;}
                 if (!cursorOnly) { await RunWeb(); await RunApp(); }
                 await RunCursor();
@@ -108,6 +115,9 @@ internal static class Checks
                 await RunDocWidthMode();
                 await RunTableWrap();
                 await RunWindowSizeKeep();
+                await RunPrinting();
+                await RunLayoutPrinting();
+                await RunToolbar();
                 await RunScrollKeep();
                 await RunThemeDirtyState();
                 await RunHomeSample();
@@ -807,8 +817,365 @@ internal static class Checks
                 main.BringToForeground();await Task.Delay(100);
                 Equal(FormWindowState.Maximized,main.WindowState);
             });
+            await TestAsync("WINSIZE-02", "Opening files, new tabs and minimized activation preserve window placement", async () =>
+            {
+                main.WindowState=FormWindowState.Normal;
+                main.Bounds=new Rectangle(80,90,930,670);
+                var expected=main.Bounds;
+                main.OpenFile(Path.Combine(Root,"test-sample.md"));
+                await Task.Delay(400);
+                main.BringToForeground();
+                Equal(expected,main.Bounds);
+                typeof(MainForm).GetMethod("NewFile",Flags)!.Invoke(main,null);
+                Equal(expected,main.Bounds);
+                main.WindowState=FormWindowState.Maximized;
+                main.OpenFile(Path.Combine(Root,"diagram-sample.md"));
+                await Task.Delay(400);
+                main.BringToForeground();
+                Equal(FormWindowState.Maximized,main.WindowState);
+                Equal(expected,main.RestoreBounds);
+                main.WindowState=FormWindowState.Minimized;
+                main.OpenFile(Path.Combine(Root,"test-sample.jsonc"));
+                main.BringToForeground();await Task.Delay(200);
+                Equal(FormWindowState.Maximized,main.WindowState);
+                main.WindowState=FormWindowState.Normal;
+                Equal(expected,main.Bounds);
+            });
         }
         finally{main.Close();}
+    }
+
+    static async Task RunPrinting()
+    {
+        var oldTheme=Brand.Theme;
+        var oldColumns=Brand.ColumnViewMode;
+        var oldText=Editor.Text;
+        var oldDirty=Tab.Dirty;
+        try
+        {
+            await TestAsync("PRINT-01", "Print media preserves every theme and removes viewport clipping", async () =>
+            {
+                Brand.ColumnViewMode=ColumnMode.Three;
+                foreach(var theme in new[]{AppTheme.Sogang,AppTheme.Albatross,AppTheme.BlueSky,AppTheme.ForestGreen})
+                {
+                    Brand.Theme=theme;
+                    await Page("# Print theme\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```cs\nvar value = 1;\n```");
+                    var colors=(await JS("[getComputedStyle(document.querySelector('h1')).color,getComputedStyle(document.querySelector('th')).backgroundColor].join('|')")).GetString();
+                    await Web.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia","{\"media\":\"print\"}");
+                    Equal(colors,(await JS("[getComputedStyle(document.querySelector('h1')).color,getComputedStyle(document.querySelector('th')).backgroundColor].join('|')")).GetString());
+                    Equal("exact",(await JS("getComputedStyle(document.body).webkitPrintColorAdjust")).GetString());
+                    Equal("visible",(await JS("getComputedStyle(document.querySelector('.md')).overflowX")).GetString());
+                    Equal("1",(await JS("getComputedStyle(document.querySelector('.md')).columnCount")).GetString());
+                    Equal("none",(await JS("getComputedStyle(document.querySelector('.copy-code-btn')).display")).GetString());
+                    await Web.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia","{\"media\":\"\"}");
+                }
+            });
+            await TestAsync("PRINT-02", "Printing includes latest unsaved text and renders a multi-page PDF", async () =>
+            {
+                Text("# Latest unsaved print\n\n"+string.Join("\n\n",Enumerable.Range(1,100).Select(i=>"## Section "+i+"\n\nPrint body "+i)));
+                await Tab.PreparePrintAsync();
+                Require((await JS("document.querySelector('.md').textContent")).ToString().Contains("Print body 100"),"Latest editor text missing from print DOM");
+                Require(Tab.Dirty,"Printing changed unsaved state");
+                var output=Path.Combine(Artifacts,"print-themed.pdf");
+                var settings=Web.CoreWebView2.Environment.CreatePrintSettings();
+                settings.ShouldPrintBackgrounds=true;
+                Require(await Web.CoreWebView2.PrintToPdfAsync(output,settings),"PDF print failed");
+                Require(new FileInfo(output).Length>5000,"Printed PDF is unexpectedly empty");
+                var pdf=System.Text.Encoding.Latin1.GetString(File.ReadAllBytes(output));
+                Require(Regex.Matches(pdf,@"/Type\s*/Page\b").Count>1,"Long print was clipped to one page");
+            });
+            await TestAsync("PRINT-04", "Print preparation waits for Mermaid and local images", async () =>
+            {
+                Text("# Print assets\n\n```mermaid\nflowchart LR\nA-->B\n```\n\n![Logo]("+Path.Combine(Root,"assets","logo.png").Replace('\\','/')+")");
+                await Tab.PreparePrintAsync();
+                Equal(true,(await JS("!!document.querySelector('.mermaid-diagram svg') && !document.querySelector('[data-mermaid-pending]') && [...document.images].every(i=>i.complete && i.naturalWidth>0)")).GetBoolean());
+            });
+            Test("PRINT-03", "Home disables printing and document menu enables it", () =>
+            {
+                using var main=new MainForm(Array.Empty<string>());
+                var menu=(ContextMenuStrip)typeof(MainForm).GetField("_menu",Flags)!.GetValue(main)!;
+                var item=(ToolStripMenuItem)typeof(MainForm).GetField("_miPrint",Flags)!.GetValue(main)!;
+                typeof(ToolStripDropDown).GetMethod("OnOpening",Flags)!.Invoke(menu,new object[]{new System.ComponentModel.CancelEventArgs()});
+                Require(!item.Enabled,"Home print enabled");
+                main.OpenFile(Path.Combine(Root,"test-sample.md"));
+                typeof(ToolStripDropDown).GetMethod("OnOpening",Flags)!.Invoke(menu,new object[]{new System.ComponentModel.CancelEventArgs()});
+                Require(item.Enabled,"Document print disabled");
+            });
+        }
+        finally
+        {
+            await Web.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia","{\"media\":\"\"}");
+            Brand.Theme=oldTheme;Brand.ColumnViewMode=oldColumns;
+            Text(oldText);typeof(FileTab).GetProperty("Dirty",Flags)!.SetValue(Tab,oldDirty);
+        }
+    }
+
+    static async Task RunToolbar()
+    {
+        var originalWidth=Brand.DocWidthMode;
+        var originalTheme=Brand.Theme;
+        using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
+        main.Show();
+        var toolbar=(ToolStrip)typeof(MainForm).GetField("_toolbar",Flags)!.GetValue(main)!;
+        var width=(ToolStripSplitButton)toolbar.Items["width"]!;
+        ToolStripButton Button(string name)=>(ToolStripButton)toolbar.Items[name]!;
+        FileTab Active()=>main.GetAllTabs().Single(t=>t.HostPage==((TabControl)typeof(MainForm).GetField("_tabs",Flags)!.GetValue(main)!).SelectedTab);
+        RichTextBox EditorOf(FileTab tab)=>(RichTextBox)typeof(FileTab).GetField("_text",Flags)!.GetValue(tab)!;
+        var path=Path.Combine(Artifacts,"toolbar-actions.md");
+        try
+        {
+            await TestAsync("TOOLBAR-01","Global icon toolbar stays above tabs and has the approved order and tooltips",async()=>
+            {
+                Equal("new,open,save,print,undo,redo,mode,width,find,highlight,close",string.Join(",",toolbar.Items.Cast<ToolStripItem>().Where(i=>i is not ToolStripSeparator).Select(i=>i.Name)));
+                Equal(0,toolbar.Top);Require(toolbar.Visible,"Toolbar hidden on home");
+                Require(Button("new").Enabled&&Button("open").Enabled,"Home file commands disabled");
+                foreach(var name in new[]{"save","print","undo","redo","mode","width","find","highlight","close"}) Require(!toolbar.Items[name]!.Enabled,"Home command enabled: "+name);
+                foreach(ToolStripItem item in toolbar.Items)
+                    if(item is not ToolStripSeparator) { Require(item.Image!=null,"Icon missing: "+item.Name);Require(item.DisplayStyle==ToolStripItemDisplayStyle.Image,"Non-icon toolbar item");Require(!string.IsNullOrWhiteSpace(item.ToolTipText)&&!string.IsNullOrWhiteSpace(item.AccessibleName),"Tooltip/accessibility missing"); }
+                File.WriteAllText(path,"# Toolbar test\n\noriginal text");main.OpenFile(path);
+                var tabs=(TabControl)typeof(MainForm).GetField("_tabs",Flags)!.GetValue(main)!;
+                Require(tabs.Top>=toolbar.Bottom,"Toolbar overlaps document tabs");
+                Equal(ToolStripItemAlignment.Right,Button("close").Alignment);
+                Require(typeof(FileTab).GetField("_viewTools",Flags)==null,"Old document width bar remains");
+                main.Size=new Size(520,500);await Task.Delay(100);
+                foreach(var name in new[]{"new","open","mode","width","find","highlight","close"}) Require(toolbar.Items[name]!.Placement==ToolStripItemPlacement.Main,"Required command overflows at minimum width: "+name);
+                main.Size=new Size(1100,780);
+            });
+            await TestAsync("TOOLBAR-02","Width split button cycles all three modes and menu matches current mode",async()=>
+            {
+                width.DropDownItems[0].PerformClick();
+                foreach(var expected in new[]{DocumentWidthMode.Wide,DocumentWidthMode.Full,DocumentWidthMode.Standard})
+                {
+                    width.PerformButtonClick();Equal(expected,Brand.DocWidthMode);
+                    Require(width.ToolTipText!.Contains(expected==DocumentWidthMode.Standard?"46rem":expected==DocumentWidthMode.Wide?"70rem":"창 맞춤"),"Width tooltip stale");
+                    Require(width.DropDownItems.Cast<ToolStripMenuItem>().All(i=>i.Image!=null),"Width menu icons missing");
+                    Equal(1,width.DropDownItems.Cast<ToolStripMenuItem>().Count(i=>i.Checked));
+                    Require(width.DropDownItems.Cast<ToolStripMenuItem>().Single(i=>i.Checked).Tag!.Equals(expected),"Width menu check stale");
+                }
+                foreach(ToolStripMenuItem item in width.DropDownItems){item.PerformClick();Equal((DocumentWidthMode)item.Tag!,Brand.DocWidthMode);}
+                Require(((ToolStripDropDownMenu)width.DropDown).ShowCheckMargin,"Width check overlaps menu icons");
+                width.DropDown.Size=width.DropDown.GetPreferredSize(Size.Empty);
+                using(var menuImage=new Bitmap(width.DropDown.Width,width.DropDown.Height))
+                {
+                    width.DropDown.DrawToBitmap(menuImage,width.DropDown.ClientRectangle);
+                    menuImage.Save(Path.Combine(Artifacts,"toolbar-width-menu.png"),System.Drawing.Imaging.ImageFormat.Png);
+                }
+                Require(!Active().Dirty,"Width changes dirtied document");await Task.CompletedTask;
+            });
+            await TestAsync("TOOLBAR-03","Mode/search/highlight buttons and keyboard changes keep active states synchronized",async()=>
+            {
+                var tab=Active();Button("mode").PerformClick();Require(tab.EditMode,"Mode button did not enter edit");
+                Require(Button("mode").ToolTipText!.Contains("편집 모드"),"Edit tooltip stale");
+                Button("find").PerformClick();await Wait(()=>Task.FromResult(Button("find").Checked));
+                Require(tab.FindBarVisible,"Find bar did not open");
+                tab.HideFindBar();await Wait(()=>Task.FromResult(!Button("find").Checked));
+                Button("highlight").PerformClick();await Wait(()=>Task.FromResult(Button("highlight").Checked));
+                Require(tab.HighlightBarVisible,"Highlight bar did not open");
+                tab.HighlightBarVisible=false;await Wait(()=>Task.FromResult(!Button("highlight").Checked));
+                main.ToggleEditMode();await Wait(()=>Task.FromResult(Button("mode").ToolTipText!.StartsWith("VIEW")));
+                Require(!tab.EditMode&&!Button("undo").Enabled&&!Button("redo").Enabled,"VIEW still permits editor history");
+            });
+            await TestAsync("TOOLBAR-04","Undo/redo and save buttons operate on actual editor contents",async()=>
+            {
+                var tab=Active();if(!tab.EditMode)Button("mode").PerformClick();
+                var editor=EditorOf(tab);var original=editor.Text;editor.ClearUndo();
+                editor.Select(editor.TextLength,0);editor.SelectedText="\nToolbar edit";
+                await Wait(()=>Task.FromResult(Button("undo").Enabled));
+                Button("undo").PerformClick();Equal(original,editor.Text);
+                await Wait(()=>Task.FromResult(Button("redo").Enabled));
+                Button("redo").PerformClick();Require(editor.Text.EndsWith("Toolbar edit"),"Redo lost insertion");
+                Button("save").PerformClick();Equal(editor.Text,File.ReadAllText(path));Require(!tab.Dirty,"Save left dirty state");
+            });
+            await TestAsync("TOOLBAR-05","Tab changes, new/close actions and read-only files update command availability",async()=>
+            {
+                var previous=Active();Button("new").PerformClick();Equal(2,main.GetAllTabs().Count);Require(!Active().EditMode,"New document inherited another tab's mode");
+                Require(Button("mode").ToolTipText!.StartsWith("VIEW"),"Tab mode tooltip stale");
+                Button("close").PerformClick();Equal(1,main.GetAllTabs().Count);Require(ReferenceEquals(previous,Active()),"Wrong tab restored");
+                var image=Path.Combine(Artifacts,"toolbar-image.png");File.Copy(Path.Combine(Root,"assets","logo.png"),image,true);main.OpenFile(image);
+                Require(!Button("save").Enabled&&!Button("mode").Enabled&&!width.Enabled&&!Button("find").Enabled&&!Button("highlight").Enabled,"Read-only file exposes text editing commands");
+                Require(Button("close").Enabled&&Button("print").Enabled,"Read-only document commands disabled");
+                Button("close").PerformClick();Equal(1,main.GetAllTabs().Count);Require(width.Enabled&&Button("save").Enabled,"Text document commands not restored");await Task.CompletedTask;
+            });
+            await TestAsync("TOOLBAR-06","Theme changes recolor current icons and toolbar renders as approved",async()=>
+            {
+                foreach(var theme in new[]{AppTheme.Sogang,AppTheme.BlueSky,AppTheme.Albatross,AppTheme.ForestGreen})
+                {
+                    typeof(MainForm).GetMethod("SetTheme",Flags)!.Invoke(main,new object[]{theme});
+                    Require(width.Tag!.ToString()!.Contains(Brand.FrameAccent.ToArgb().ToString()),"Width icon has stale theme color");
+                    Equal(Brand.Paper.ToArgb(),toolbar.BackColor.ToArgb());
+                }
+                using var screenshot=new Bitmap(toolbar.Width,toolbar.Height);
+                toolbar.DrawToBitmap(screenshot,toolbar.ClientRectangle);
+                screenshot.Save(Path.Combine(Artifacts,"toolbar-actual.png"),System.Drawing.Imaging.ImageFormat.Png);
+                using var icons=new Bitmap(14*70,110);
+                using(var graphics=Graphics.FromImage(icons))
+                {
+                    graphics.Clear(Color.White);var kinds=new[]{"new","open","save","print","undo","redo","view","edit","fit","wide","window","search","highlight","close"};
+                    for(int i=0;i<kinds.Length;i++){using var icon=DocumentToolbarIcons.Create(kinds[i],Brand.Ink,32);graphics.DrawImage(icon,i*70+19,16);graphics.DrawString(kinds[i],SystemFonts.MessageBoxFont!,Brushes.Black,i*70+5,62);}
+                }
+                icons.Save(Path.Combine(Artifacts,"toolbar-icons-actual.png"),System.Drawing.Imaging.ImageFormat.Png);await Task.CompletedTask;
+            });
+            await TestAsync("TOOLBAR-07","Icon selection shows a large name, holds it, then gradually fades away",async()=>
+            {
+                var notice=(ToolbarActionNotice)typeof(MainForm).GetField("_actionNotice",Flags)!.GetValue(main)!;
+                var tab=Active();if(tab.FindBarVisible)tab.HideFindBar();
+                Button("find").PerformClick();
+                Equal("검색",notice.Text);Require(notice.Visible&&notice.Opacity>.9,"Notice did not immediately appear");
+                var font=(Font)typeof(ToolbarActionNotice).GetField("_messageFont",Flags)!.GetValue(notice)!;
+                Require(font.SizeInPoints>=24,"Notice text is not large");
+                using(var image=new Bitmap(notice.Width,notice.Height))
+                {
+                    notice.DrawToBitmap(image,notice.ClientRectangle);
+                    image.Save(Path.Combine(Artifacts,"toolbar-notice.png"),System.Drawing.Imaging.ImageFormat.Png);
+                }
+                await Task.Delay(250);Require(notice.Opacity>.9,"Notice faded before the hold elapsed");
+                await Wait(()=>Task.FromResult(notice.Visible&&notice.Opacity>0&&notice.Opacity<.8),2000);
+                await Wait(()=>Task.FromResult(!notice.Visible),2000);
+            });
+            await TestAsync("TOOLBAR-08","Repeated selections replace the notice and restart the fade with the new state",async()=>
+            {
+                var notice=(ToolbarActionNotice)typeof(MainForm).GetField("_actionNotice",Flags)!.GetValue(main)!;
+                width.DropDownItems[2].PerformClick();Equal("창 맞춤",notice.Text);
+                await Wait(()=>Task.FromResult(notice.Opacity<.8),2000);
+                width.DropDownItems[1].PerformClick();Equal("넓게 (70rem)",notice.Text);
+                Require(notice.Visible&&notice.Opacity>.9,"Repeated click did not reset opacity");
+                Button("mode").PerformClick();Equal(Active().EditMode?"편집 모드":"VIEW 모드",notice.Text);
+                await Task.Delay(250);Require(notice.Visible&&notice.Opacity>.9,"Old timer hid the new notice");
+                await Wait(()=>Task.FromResult(!notice.Visible),2500);
+                var tab=Active();if(tab.EditMode)main.ToggleEditMode();
+                Button("undo").PerformClick();Require(!notice.Visible,"Disabled action produced a notice");
+            });
+            await TestAsync("TOOLBAR-09","Notice passes clicks through, never takes focus and hides when minimized",async()=>
+            {
+                var notice=(ToolbarActionNotice)typeof(MainForm).GetField("_actionNotice",Flags)!.GetValue(main)!;
+                var before=main.Bounds;
+                width.DropDownItems[0].PerformClick();
+                Require(notice.Visible&&!notice.ContainsFocus,"Notice took keyboard focus");Equal(before,main.Bounds);
+                var parameters=(CreateParams)typeof(ToolbarActionNotice).GetProperty("CreateParams",Flags)!.GetValue(notice)!;
+                Require((parameters.ExStyle&0x08000020)==0x08000020,"Notice is not click-through/non-activating");
+                Equal(-1L,PrintClient(notice.Handle,0x0084,IntPtr.Zero,IntPtr.Zero).ToInt64());
+                Equal(3L,PrintClient(notice.Handle,0x0021,IntPtr.Zero,IntPtr.Zero).ToInt64());
+                main.WindowState=FormWindowState.Minimized;await Task.Delay(100);
+                Require(!notice.Visible,"Notice stayed visible while owner minimized");
+                main.WindowState=FormWindowState.Normal;
+            });
+            await TestAsync("TOOLBAR-10","Action notice stays at the bottom center, clear of toolbar tooltips after resizing",async()=>
+            {
+                var notice=(ToolbarActionNotice)typeof(MainForm).GetField("_actionNotice",Flags)!.GetValue(main)!;
+                var footer=(Panel)typeof(MainForm).GetField("_footBand",Flags)!.GetValue(main)!;
+                foreach(var size in new[]{new Size(1100,780),new Size(520,340),new Size(900,650)})
+                {
+                    main.Size=size;
+                    width.DropDownItems[2].PerformClick();
+                    await Task.Delay(60);
+                    var local=main.PointToClient(notice.Location);
+                    var gap=(int)Math.Round(24*main.DeviceDpi/96d);
+                    Require(Math.Abs(local.X-(main.ClientSize.Width-notice.Width)/2)<=2,"Notice is not horizontally centered");
+                    Require(Math.Abs(local.Y+notice.Height-(main.ClientSize.Height-footer.Height-gap))<=2,"Notice is not above the footer at the bottom");
+                    Require(local.Y>toolbar.Bottom+70,"Notice overlaps the toolbar tooltip area");
+                    main.Location=new Point(main.Left+4,main.Top+3);await Task.Delay(30);
+                    var moved=main.PointToClient(notice.Location);
+                    Require(Math.Abs(moved.X-local.X)<=2&&Math.Abs(moved.Y-local.Y)<=2,"Notice did not follow window movement");
+                }
+            });
+        }
+        finally
+        {
+            Brand.Theme=originalTheme;Brand.SaveTheme();main.SetDocWidthMode(originalWidth);
+            foreach(var tab in main.GetAllTabs()){typeof(FileTab).GetProperty("Dirty",Flags)!.SetValue(tab,false);tab.DisposeWatch();}
+            main.Close();
+        }
+    }
+
+    static async Task RunLayoutPrinting()
+    {
+        var originalWidth=Brand.DocWidthMode;
+        var originalText=Editor.Text;
+        var dirty=Tab.Dirty;
+        try
+        {
+            await TestAsync("LAYOUT-01", "Window-fit view uses 12px margins and wide tables scroll", async () =>
+            {
+                Brand.DocWidthMode=DocumentWidthMode.Full;
+                var columns=string.Join(" | ",Enumerable.Range(1,24).Select(i=>"Wide column "+i));
+                var separator=string.Join(" | ",Enumerable.Repeat("---",24));
+                await Page("# Flexible view\n\n| "+columns+" |\n| "+separator+" |\n| "+columns+" |");
+                Equal("12px",(await JS("getComputedStyle(document.querySelector('.md')).paddingLeft")).GetString());
+                Equal("12px",(await JS("getComputedStyle(document.querySelector('.md')).paddingTop")).GetString());
+                Equal("none",(await JS("getComputedStyle(document.querySelector('.md')).maxWidth")).GetString());
+                Require((await JS("Math.abs(document.querySelector('.md').getBoundingClientRect().width-window.innerWidth)<2")).GetBoolean(),"Window-fit article remains narrow");
+                Require((await JS("document.querySelector('.md-table-wrap').scrollWidth>document.querySelector('.md-table-wrap').clientWidth")).GetBoolean(),"Wide table did not scroll");
+            });
+            await TestAsync("LAYOUT-02", "Global width tool switches document width without dirtying it", async () =>
+            {
+                using var main=new MainForm(Array.Empty<string>()){Opacity=0,ShowInTaskbar=false};
+                main.Show();main.OpenFile(Path.Combine(Root,"test-sample.md"));
+                var tab=main.GetAllTabs()[0];
+                var width=(ToolStripSplitButton)typeof(MainForm).GetField("_widthTool",Flags)!.GetValue(main)!;
+                Require(width.Visible,"Width tool hidden");
+                width.DropDownItems[0].PerformClick();Equal(DocumentWidthMode.Standard,Brand.DocWidthMode);
+                width.DropDownItems[2].PerformClick();Equal(DocumentWidthMode.Full,Brand.DocWidthMode);
+                Require(!tab.Dirty,"Width change modified document");
+                await Task.CompletedTask;main.Close();
+            });
+            Test("PRINT-05", "Paper, orientation, custom margins and scale round-trip safely", () =>
+            {
+                var path=Path.Combine(Artifacts,"print-settings-test.json");
+                var options=new PrintLayoutOptions{Paper="A3",Landscape=true,MarginPreset="Custom",TopMm=4,BottomMm=5,LeftMm=6,RightMm=7,FitWidth=false,ScalePercent=85};
+                options.Save(path);var loaded=PrintLayoutOptions.Load(path);
+                Equal("A3",loaded.Paper);Require(loaded.Landscape&&!loaded.FitWidth,"Orientation/scale lost");
+                Equal(4d,loaded.TopMm);Equal(7d,loaded.RightMm);Equal(85,loaded.ScalePercent);
+                var settings=loaded.CreateSettings(Web.CoreWebView2.Environment);
+                Equal(Microsoft.Web.WebView2.Core.CoreWebView2PrintOrientation.Landscape,settings.Orientation);
+                Require(Math.Abs(settings.PageWidth-297/25.4)<.001,"Paper width mismatch");
+                Require(Math.Abs(settings.MarginTop-4/25.4)<.001,"Custom margin mismatch");Equal(.85,settings.ScaleFactor);
+                Require(settings.ShouldPrintBackgrounds,"Theme backgrounds disabled");
+                File.WriteAllText(path,"invalid-json");loaded=PrintLayoutOptions.Load(path);
+                Equal("A4",loaded.Paper);Equal(8d,loaded.TopMm);Require(loaded.FitWidth&&!loaded.Landscape,"Bad defaults");
+            });
+            await TestAsync("PRINT-06", "Isolated print preview changes real PDF direction and preserves source scroll/layout", async () =>
+            {
+                Brand.DocWidthMode=DocumentWidthMode.Full;
+                Text("# Isolated print\n\n"+string.Join("\n\n",Enumerable.Range(1,90).Select(i=>"## Section "+i+"\n\nPreview content "+i)));
+                await Page(Editor.Text);await JS("window.scrollTo(0,600)");
+                var before=(await JS("[document.body.className,window.scrollY,document.querySelector('.md').innerHTML].join('|')")).ToString();
+                var snapshot=(string)Call("WrapHtml",(string)Call("BuildPreviewHtml")!)!;
+                var settingsPath=Path.Combine(Artifacts,"dialog-settings.json");
+                using var dialog=new PrintLayoutDialog(snapshot,new PrintLayoutOptions(),settingsPath){Opacity=0,ShowInTaskbar=false};
+                dialog.Show(Host);
+                await Wait(()=>Task.FromResult(dialog.PreviewReady),40000);
+                (double Width,double Height) Dimensions(string path)
+                {
+                    var pdf=System.Text.Encoding.Latin1.GetString(File.ReadAllBytes(path));
+                    var match=Regex.Match(pdf,@"/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)");
+                    Require(match.Success,"PDF page dimensions missing");
+                    return(double.Parse(match.Groups[1].Value,System.Globalization.CultureInfo.InvariantCulture),double.Parse(match.Groups[2].Value,System.Globalization.CultureInfo.InvariantCulture));
+                }
+                var portrait=Dimensions(dialog.PreviewFile);Require(portrait.Width<portrait.Height,"Portrait preview is landscape");
+                File.Copy(dialog.PreviewFile,Path.Combine(Artifacts,"layout-portrait.pdf"),true);
+                var direction=(ComboBox)typeof(PrintLayoutDialog).GetField("_direction",Flags)!.GetValue(dialog)!;
+                direction.SelectedIndex=1;
+                await Wait(()=>Task.FromResult(dialog.PreviewReady&&dialog.Options.Landscape),40000);
+                var landscape=Dimensions(dialog.PreviewFile);Require(landscape.Width>landscape.Height,"Landscape preview is portrait");
+                File.Copy(dialog.PreviewFile,Path.Combine(Artifacts,"layout-landscape.pdf"),true);
+                var margins=(ComboBox)typeof(PrintLayoutDialog).GetField("_margins",Flags)!.GetValue(dialog)!;
+                var edges=(NumericUpDown[])typeof(PrintLayoutDialog).GetField("_edges",Flags)!.GetValue(dialog)!;
+                var scale=(ComboBox)typeof(PrintLayoutDialog).GetField("_scale",Flags)!.GetValue(dialog)!;
+                var percent=(NumericUpDown)typeof(PrintLayoutDialog).GetField("_percent",Flags)!.GetValue(dialog)!;
+                margins.SelectedIndex=2;edges[0].Value=9;edges[2].Value=5;scale.SelectedIndex=1;percent.Value=85;
+                await Wait(()=>Task.FromResult(dialog.PreviewReady&&dialog.Options.ScalePercent==85),40000);
+                Equal(9d,dialog.Options.TopMm);Equal(5d,dialog.Options.LeftMm);Require(!dialog.Options.FitWidth,"Manual scale ignored");
+                Equal(before,(await JS("[document.body.className,window.scrollY,document.querySelector('.md').innerHTML].join('|')")).ToString());
+                Require(Tab.Dirty,"Print cleared unsaved state");
+                Require(PrintLayoutOptions.Load(settingsPath).Landscape,"Last direction was not saved");
+                dialog.Close();
+            });
+        }
+        finally
+        {
+            Brand.DocWidthMode=originalWidth;Brand.SaveDocWidth();Tab.ApplyDocWidthMode();
+            Text(originalText);typeof(FileTab).GetProperty("Dirty",Flags)!.SetValue(Tab,dirty);
+        }
     }
 
     static async Task RunTableWrap()
@@ -973,7 +1340,7 @@ internal static class Checks
                 var association=(Label)typeof(MainForm).GetField("_associationLink",Flags)!.GetValue(main)!;
                 Require(link.Visible && link.Text=="test-sample.md 열기","Home sample link missing");
                 Require(link.Top>intro.Bottom && link.Left==intro.Left,"Home sample link overlaps");
-                Require(diagram.Visible && diagram.Text=="diagram-sample.md 열기","Home diagram link missing");
+                Require(diagram.Visible && diagram.Text=="diagram-sample.md (Mermaid) 열기","Home diagram link missing Mermaid label");
                 Require(diagram.Top>link.Bottom && diagram.Left==link.Left,"Home diagram link overlaps");
                 Require(association.Visible && association.Text=="md 파일 연결프로그램 등록","Home association link missing");
                 Require(association.Top>intro.Bottom && association.Left>link.Left,"Home association link is not in the right column");
@@ -1077,7 +1444,8 @@ internal static class Checks
             using var main = new MainForm(Array.Empty<string>()) { Opacity = 0, ShowInTaskbar = false };
             main.Show();
             var line = (Panel)typeof(MainForm).GetField("_homeThemeLine", Flags)!.GetValue(main)!;
-            Require(line.Visible && line.Top == 0 && line.Height == 2, "Home theme line is not visible at the top");
+            var toolbar=(ToolStrip)typeof(MainForm).GetField("_toolbar",Flags)!.GetValue(main)!;
+            Require(line.Visible && line.Top == toolbar.Bottom && line.Height == 2, "Home theme line is not visible below the toolbar");
             Equal(Brand.FrameAccent.ToArgb(), line.BackColor.ToArgb());
             main.Close();
         });

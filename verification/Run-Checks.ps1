@@ -1,4 +1,4 @@
-param([switch]$CursorOnly, [switch]$NativeOnly, [switch]$EditorOnly)
+param([switch]$CursorOnly, [switch]$NativeOnly, [switch]$EditorOnly, [switch]$PrintOnly, [switch]$ToolbarOnly)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $runnerDir = Join-Path $repoRoot 'obj\verification'
@@ -21,6 +21,8 @@ New-Item -ItemType Directory -Force -Path $runnerDir | Out-Null
     <EmbeddedResource Include="../../diagram-sample.md" LogicalName="MDviewer.diagram-sample.md" />
     <Compile Include="../../Program.cs" />
     <Compile Include="../../WordExport.cs" />
+    <Compile Include="../../PrintLayout.cs" />
+    <Compile Include="../../AppToolbar.cs" />
     <Compile Include="../../verification/Checks.cs.txt" />
     <PackageReference Include="Markdig" Version="0.41.3" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3351.48" />
@@ -32,5 +34,7 @@ $runnerArgs = @($repoRoot)
 if ($CursorOnly) { $runnerArgs += '--cursor' }
 if ($NativeOnly) { $runnerArgs += '--native' }
 if ($EditorOnly) { $runnerArgs += '--editor' }
+if ($PrintOnly) { $runnerArgs += '--print' }
+if ($ToolbarOnly) { $runnerArgs += '--toolbar' }
 dotnet run --project (Join-Path $runnerDir 'Verification.csproj') -- @runnerArgs
 exit $LASTEXITCODE

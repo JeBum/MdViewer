@@ -7,6 +7,16 @@
 // 4. 변경 이력은 History.md에 일자별로 상세 기록 유지
 // ==============================================================================================
 // [요건 이력]
+// TOOLBAR-10 / 2026-10-26 / 큰 기능명 안내를 창 하단 중앙에 배치하여 상단 아이콘 툴팁과 겹치지 않게 한다.
+// TOOLBAR-07 / 2026-10-26 / 아이콘 선택 시 큰 기능명을 잠시 표시한 뒤 서서히 지우고 연속 선택은 최신 이름으로 교체한다.
+// TOOLBAR-01 / 2026-10-26 / 승인된 선형 아이콘 툴바를 탭 위에 고정하고 파일·편집·보기·검색 순으로 배치한다.
+// TOOLBAR-02 / 2026-10-26 / 문서 폭은 기본·넓게·창 맞춤 3단계 순환/메뉴 선택, 모드는 VIEW/편집 토글로 제공한다.
+// TOOLBAR-03 / 2026-10-26 / 활성 문서·모드·검색·강조·실행 취소 상태와 테마를 툴바에 즉시 반영한다.
+// LAYOUT-01 / 2026-10-26 / 화면은 창 맞춤·12px 여백을 기본으로 하고 읽기 폭을 바로 전환한다.
+// PRINT-05 / 2026-10-26 / 별도 미리보기에서 용지·방향·여백·배율을 정하고 기억하며 화면 배치를 유지한다.
+// PRINT-01 / 2026-10-26 / 메뉴와 Ctrl+P로 최신 문서를 테마 색상을 유지하여 잘림 없이 인쇄한다.
+// WINSIZE-02 / 2026-10-26 / 새 파일·새 탭을 열어도 현재 창 위치·크기·최대화 상태를 유지한다.
+// HOME-03 / 2026-10-26 / 첫 화면의 diagram-sample.md 옆에 (Mermaid)를 표시한다.
 // WINSIZE-01 / 2026-10-10 / 이미 실행 중인 앱에서 md 파일을 더블클릭해 열어도 현재 창 크기(최대화 포함)를 유지한다.
 // SCROLL-01 / 2026-10-10 / 편집 모드에서 VIEW 모드로 돌아와도 VIEW 스크롤 위치를 맨 위로 되돌리지 않고 유지한다.
 // ==============================================================================================
@@ -154,7 +164,7 @@ static class Program
     }
 }
 
-sealed class MainForm : Form, IMessageFilter
+sealed partial class MainForm : Form, IMessageFilter
 {
     readonly Panel _banner = new() { Dock = DockStyle.Top, Height = 53 };
     readonly Panel _footBand = new() { Dock = DockStyle.Bottom, Height = 53 };
@@ -175,6 +185,7 @@ sealed class MainForm : Form, IMessageFilter
     readonly Label _helpMouseTitle = new();
     readonly ContextMenuStrip _menu = new();
     ToolStripMenuItem? _miSave;
+    ToolStripMenuItem? _miPrint;
     ToolStripMenuItem? _miDocx;
     ToolStripMenuItem? _miClose;
     ToolStripMenuItem? _miCloseAll;
@@ -227,6 +238,7 @@ sealed class MainForm : Form, IMessageFilter
         _tabs.DrawItem += DrawTab;
         BuildHome();
         BuildMenu();
+        BuildToolbar();
         ApplyTheme();
         ContextMenuStrip = _menu;
         _tabs.ContextMenuStrip = _menu;
@@ -236,12 +248,21 @@ sealed class MainForm : Form, IMessageFilter
         Controls.Add(_banner);
         Controls.Add(_footBand);
         Controls.Add(_homeThemeLine);
+        Controls.Add(_toolbar);
         BindDrop(this);
         BindDrop(_tabs);
         BindDrop(_home);
+        BindDrop(_toolbar);
 
         KeyDown += (_, e) =>
         {
+            if (e.Control && e.KeyCode == Keys.P)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                Current?.Print();
+                return;
+            }
             if (e.Control && e.KeyCode == Keys.N) NewFile();
             if (e.Control && e.KeyCode == Keys.O) OpenDialog();
             if (e.Control && e.KeyCode == Keys.W) CloseCurrent();
@@ -477,7 +498,7 @@ sealed class MainForm : Form, IMessageFilter
         _sampleLink.BackColor = Color.Transparent;
         _sampleLink.UseCompatibleTextRendering = true;
         _sampleLink.Click += (_, _) => OpenTestSample();
-        _diagramSampleLink.Text = "diagram-sample.md 열기";
+        _diagramSampleLink.Text = "diagram-sample.md (Mermaid) 열기";
         _diagramSampleLink.AutoSize = true;
         _diagramSampleLink.Cursor = Cursors.Hand;
         _diagramSampleLink.Anchor = AnchorStyles.Top | AnchorStyles.Left;
@@ -778,6 +799,8 @@ sealed class MainForm : Form, IMessageFilter
         _miDocx = new ToolStripMenuItem("Word로 저장", null, (_, _) => Current?.SaveDocx());
         _menu.Items.Add(_miSave);
         _menu.Items.Add(_miDocx);
+        _miPrint = new ToolStripMenuItem("인쇄 (Ctrl+P)", null, (_, _) => Current?.Print());
+        _menu.Items.Add(_miPrint);
         _menu.Items.Add(new ToolStripSeparator());
         _miClose = new ToolStripMenuItem("닫기", null, (_, _) => CloseCurrent());
         _miCloseAll = new ToolStripMenuItem("전체 닫기", null, (_, _) => CloseAll());
@@ -892,7 +915,7 @@ sealed class MainForm : Form, IMessageFilter
         _menu.Items.Add(columnMenu);
 
         // 요구사항: 문서 폭(너비) 선택 기능 제공 (기본 46rem, 넓게 70rem, 전체 너비 창 맞춤)
-        _miWidthStandard = new ToolStripMenuItem("기본 (46rem)") { CheckOnClick = true };
+        _miWidthStandard = new ToolStripMenuItem("읽기 편한 폭") { CheckOnClick = true };
         _miWidthWide = new ToolStripMenuItem("넓게 (70rem)") { CheckOnClick = true };
         _miWidthFull = new ToolStripMenuItem("전체 너비 (창 맞춤)") { CheckOnClick = true };
         _miWidthStandard.CheckedChanged += (_, _) =>
@@ -926,6 +949,7 @@ sealed class MainForm : Form, IMessageFilter
             _menuBusy = true;
             var has = Current != null;
             if (_miSave != null) _miSave.Enabled = has;
+            if (_miPrint != null) _miPrint.Enabled = Current?.CanPrint == true;
             if (_miDocx != null) _miDocx.Enabled = has;
             if (_miClose != null) _miClose.Enabled = has;
             if (_miCloseAll != null) _miCloseAll.Enabled = _tabs.TabCount > 0;
@@ -1073,7 +1097,7 @@ sealed class MainForm : Form, IMessageFilter
         finally { _menuBusy = busy; }
     }
 
-    void SetDocWidthMode(DocumentWidthMode mode)
+    internal void SetDocWidthMode(DocumentWidthMode mode)
     {
         if (Brand.DocWidthMode != mode)
         {
@@ -1083,6 +1107,7 @@ sealed class MainForm : Form, IMessageFilter
                 tab.ApplyDocWidthMode();
         }
         SyncDocWidthMenu();
+        SyncToolbar();
     }
 
     void ApplyTheme()
@@ -1115,6 +1140,7 @@ sealed class MainForm : Form, IMessageFilter
             if (p.Tag is FileTab tab) tab.ApplyChrome();
         ApplyMenuFont();
         SizeMenu();
+        SyncToolbar();
     }
 
     bool _menuFontLock;
@@ -1268,19 +1294,33 @@ sealed class MainForm : Form, IMessageFilter
 
     void AddTab(FileTab tab)
     {
-        tab.DirtyChanged += SyncTitle;
-        tab.OpenRequested += OpenFile;
-        tab.AttachMenu(_menu);
-        var pageNew = new TabPage(tab.Title) { Tag = tab, AllowDrop = true };
-        tab.HostPage = pageNew;
-        BindDrop(pageNew);
-        BindDrop(tab);
-        pageNew.Controls.Add(tab);
-        _tabs.TabPages.Add(pageNew);
-        _tabs.SelectedTab = pageNew;
-        _tabs.Visible = true;
-        ShowHome();
-        SyncTitle();
+        // 요구사항: 탭 생성 중 레이아웃/포커스가 변경되어도 사용자가 정한 창 배치를 보존한다.
+        var bounds = Bounds;
+        var state = WindowState;
+        SuspendLayout();
+        try
+        {
+            tab.DirtyChanged += SyncTitle;
+            tab.UiStateChanged += SyncToolbar;
+            tab.OpenRequested += OpenFile;
+            tab.AttachMenu(_menu);
+            var pageNew = new TabPage(tab.Title) { Tag = tab, AllowDrop = true };
+            tab.HostPage = pageNew;
+            BindDrop(pageNew);
+            BindDrop(tab);
+            pageNew.Controls.Add(tab);
+            _tabs.TabPages.Add(pageNew);
+            _tabs.SelectedTab = pageNew;
+            _tabs.Visible = true;
+            ShowHome();
+            SyncTitle();
+        }
+        finally
+        {
+            ResumeLayout(true);
+            if (WindowState != state) WindowState = state;
+            if (state == FormWindowState.Normal && Bounds != bounds) Bounds = bounds;
+        }
     }
 
     void CloseCurrent()
@@ -1317,6 +1357,7 @@ sealed class MainForm : Form, IMessageFilter
 
     void SyncTitle()
     {
+        SyncToolbar();
         if (Current == null)
         {
             Text = "MDviewer";
@@ -1336,7 +1377,6 @@ sealed class MainForm : Form, IMessageFilter
             Native.ShowWindow(Handle, 9);
         Native.SetForegroundWindow(Handle);
         Activate();
-        BringToFront();
     }
 
     public static bool IsMd(string path) =>
@@ -1638,6 +1678,31 @@ sealed class FileTab : Panel
         }
     }
     public event Action? DirtyChanged;
+    public event Action? UiStateChanged;
+    bool _uiStateQueued;
+    public bool FindBarVisible => _findBar.Visible;
+    public bool CanUndoEdit => _editMode && !_text.ReadOnly && _text.CanUndo;
+    public bool CanRedoEdit => _editMode && !_text.ReadOnly && _text.CanRedo;
+    public bool CanSaveDocument => !IsBrowserDocument && !_largeEditorOnly;
+
+    void NotifyUiStateChanged()
+    {
+        if (!IsHandleCreated || IsDisposed || _uiStateQueued) return;
+        _uiStateQueued = true;
+        BeginInvoke(() => { _uiStateQueued = false; if (!IsDisposed) UiStateChanged?.Invoke(); });
+    }
+
+    public void UndoEdit()
+    {
+        if (!CanUndoEdit) return;
+        _text.Focus(); _text.Undo(); NotifyUiStateChanged();
+    }
+
+    public void RedoEdit()
+    {
+        if (!CanRedoEdit) return;
+        _text.Focus(); _text.Redo(); NotifyUiStateChanged();
+    }
     public event Action<string>? OpenRequested;
 
     public bool HighlightBarVisible
@@ -1693,6 +1758,7 @@ sealed class FileTab : Panel
                 _preserveEditorFirstLineOnEditEntry = -1;
             }
             _text.ReadOnly = !value || _largeEditorOnly;
+            NotifyUiStateChanged();
             ApplyLayout();
             // 요구사항: 편집 모드 진입 시 VIEW를 재탐색하지 않고 갱신하여 마지막 스크롤 위치를 유지한다.
             RefreshPreview(preserveScroll: enteringEditMode || _preserveViewScrollOnEditEntry);
@@ -1866,6 +1932,11 @@ sealed class FileTab : Panel
         _text.DragDrop += OnEditorDrop;
         _text.KeyDown += (_, e) =>
         {
+            if (e.Control && (e.KeyCode == Keys.Y || (e.Shift && e.KeyCode == Keys.Z)))
+            {
+                e.Handled = true; e.SuppressKeyPress = true;
+                RedoEdit(); return;
+            }
             if (e.Control && e.KeyCode == Keys.F && !e.Shift && !e.Alt)
             {
                 e.Handled = true;
@@ -1974,6 +2045,7 @@ sealed class FileTab : Panel
         };
         _text.TextChanged += (_, _) =>
         {
+            NotifyUiStateChanged();
             Dirty = _text.Text != _loaded;
             _gutter.Width = GutterWidth(_text);
             _gutter.Invalidate();
@@ -2057,6 +2129,10 @@ sealed class FileTab : Panel
             ApplySplitterDistance();
         };
         Controls.Add(_split);
+        _text.SelectionChanged += (_, _) => NotifyUiStateChanged();
+        _text.KeyUp += (_, _) => NotifyUiStateChanged();
+        _findBar.VisibleChanged += (_, _) => NotifyUiStateChanged();
+        _hlBar.VisibleChanged += (_, _) => NotifyUiStateChanged();
         Controls.Add(_hlBar);
         Controls.Add(_findBar);
         _findBar.BringToFront();
@@ -2209,7 +2285,7 @@ sealed class FileTab : Panel
         }
     }
 
-    static async Task InitOneWeb(WebView2 web, CoreWebView2Environment env, string previewDir)
+    async Task InitOneWeb(WebView2 web, CoreWebView2Environment env, string previewDir)
     {
         await web.EnsureCoreWebView2Async(env);
         if (!string.IsNullOrEmpty(Brand.AssetDir))
@@ -2234,6 +2310,69 @@ sealed class FileTab : Panel
         web.CoreWebView2.Settings.IsZoomControlEnabled = false;
         web.CoreWebView2.Settings.IsPinchZoomEnabled = false;
         web.ZoomFactor = 1;
+        // WebView에 포커스가 있어도 브라우저 기본 인쇄 대신 최신 문서 인쇄 경로를 사용한다.
+        web.KeyDown += (_, e) =>
+        {
+            if (e.Control && e.KeyCode == Keys.P && !e.Handled)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                web.BeginInvoke(() => Print());
+            }
+        };
+    }
+
+    public bool CanPrint => !_largeEditorOnly;
+    bool _printing;
+
+    // 요구사항: 미저장 편집 내용과 도표/이미지 로딩을 반영한 뒤 테마 컬러 인쇄 UI를 연다.
+    public async Task PreparePrintAsync()
+    {
+        if (!CanPrint) throw new InvalidOperationException("대용량 편집 전용 문서는 인쇄할 수 없습니다.");
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!_ready || _web.CoreWebView2 == null ||
+            (!IsBrowserDocument && await _web.ExecuteScriptAsync("typeof updatePreviewContent === 'function'") != "true"))
+        {
+            if (IsDisposed || DateTime.UtcNow >= deadline)
+                throw new TimeoutException("문서 준비가 끝난 뒤 다시 인쇄해 주세요.");
+            await Task.Delay(100);
+        }
+        if (IsBrowserDocument) return;
+        _previewTick.Stop();
+        var html = System.Text.Json.JsonSerializer.Serialize(BuildPreviewHtml());
+        await _web.ExecuteScriptAsync("updatePreviewContent(" + html + ",0,0)");
+        while (await _web.ExecuteScriptAsync("!document.querySelector('[data-mermaid-pending]') && [...document.images].every(i=>i.complete) && document.fonts.status === 'loaded'") != "true")
+        {
+            if (IsDisposed || DateTime.UtcNow >= deadline)
+                throw new TimeoutException("도표 또는 이미지 로딩이 끝난 뒤 다시 인쇄해 주세요.");
+            await Task.Delay(100);
+        }
+    }
+
+    public async void Print()
+    {
+        if (_printing) return;
+        _printing = true;
+        try
+        {
+            if (!CanPrint) return;
+            if (IsBrowserDocument)
+            {
+                await PreparePrintAsync();
+                _web.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.Browser);
+            }
+            else
+            {
+                // 인쇄는 독립된 문서 스냅샷에서 수행해 VIEW의 폭·스크롤·편집 상태를 보존한다.
+                using var dialog = new PrintLayoutDialog(WrapHtml(BuildPreviewHtml()));
+                dialog.ShowDialog(this);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!IsDisposed) MessageBox.Show(this, ex.Message, "인쇄 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally { _printing = false; }
     }
 
     void HookWebDrop(WebView2 web)
@@ -4427,7 +4566,9 @@ sealed class FileTab : Panel
          ".mermaid-error{padding:8px 12px;color:#b42318;text-align:left;}" +
          "body:not(.multi-col).width-standard .md{max-width:46rem;}" +
          "body:not(.multi-col).width-wide .md{max-width:70rem;}" +
-         "body:not(.multi-col).width-full .md{max-width:none;width:calc(100% - 48px);margin:0 24px;}" +
+         "body:not(.multi-col).width-full .md{max-width:none;width:100%;margin:0;}" +
+         "@media screen{.md{padding:12px;} .md-table-wrap>table{width:max-content;max-width:none;min-width:100%;} .md-table-wrap th,.md-table-wrap td{min-width:8ch;max-width:48ch;}" +
+         ".mermaid-diagram svg{max-width:none;}body.multi-col:not(.md-edit-position) .md{width:calc(100vw - 24px) !important;height:calc(100vh - 24px) !important;margin:12px !important;}}" +
          "html:has(meta[name='word-export']) body .md{max-width:46rem !important;width:100% !important;margin:0 auto !important;}" +
          ".md{overflow-wrap:anywhere;word-break:break-word;}" +
          ".md-table-wrap{width:100%;max-width:100%;overflow-x:auto;margin:0.8em 0;box-sizing:border-box;-webkit-overflow-scrolling:touch;}" +
@@ -4451,6 +4592,17 @@ sealed class FileTab : Panel
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-track{background:transparent !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.35) !important;border-radius:4px !important;}" +
          "body.multi-col:not(.md-edit-position) .md::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,0.6) !important;}" +
+         // 요구사항: 인쇄 시 테마 색상을 보존하고 다단/스크롤에 가려진 본문 전체를 출력한다.
+         "@media print{" +
+         "*{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}" +
+         "html,body,body.multi-col:not(.md-edit-position),body.md-edit-position{width:auto !important;height:auto !important;margin:0 !important;padding:0 !important;overflow:visible !important;}" +
+         "body .md,body.multi-col:not(.md-edit-position) .md{max-width:none !important;width:100% !important;height:auto !important;margin:0 !important;padding:0 !important;columns:auto !important;column-count:1 !important;column-width:auto !important;overflow:visible !important;}" +
+         "#md-position-rail,#md-cursor-indicator,.copy-code-btn{display:none !important;}" +
+         ".md-table-wrap,.json-view,pre,.katex-display{overflow:visible !important;max-height:none !important;}" +
+         "pre,.json-view,.code-line{white-space:pre-wrap !important;overflow-wrap:anywhere !important;}" +
+         "body .md img,body.multi-col:not(.md-edit-position) img{max-height:none !important;max-width:100% !important;}" +
+         "h1,h2,h3{break-after:avoid;}thead{display:table-header-group;}tr,figure,.mermaid-diagram{break-inside:avoid;}" +
+         "}" +
           $"</style></head><body class='{colClass} {widthClass}' style='--md-cursor-accent:{Brand.CursorActiveAccentHex}'><article class='md'>" +
         body + "</article>" + ScrollScript + "</body></html>";
     }
@@ -5191,12 +5343,14 @@ static class Brand
     }
 
     static string DocWidthPath =>
-        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MDviewer", "docwidth.txt");
+        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MDviewer", "viewwidth.txt");
 
-    public static DocumentWidthMode DocWidthMode { get; set; } = DocumentWidthMode.Standard;
+    public static DocumentWidthMode DocWidthMode { get; set; } = DocumentWidthMode.Full;
 
     public static void LoadDocWidth()
     {
+        // 종이 폭처럼 보이던 기존 기본값을 이관하지 않고 창 맞춤으로 시작한 뒤 선택을 기억한다.
+        DocWidthMode = DocumentWidthMode.Full;
         try
         {
             var p = DocWidthPath;
@@ -5207,7 +5361,7 @@ static class Brand
                     DocWidthMode = DocumentWidthMode.Wide;
                 else if (txt.Equals("Full", StringComparison.OrdinalIgnoreCase))
                     DocWidthMode = DocumentWidthMode.Full;
-                else
+                else if (txt.Equals("Standard", StringComparison.OrdinalIgnoreCase))
                     DocWidthMode = DocumentWidthMode.Standard;
             }
         }
