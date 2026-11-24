@@ -2,6 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace MDviewer;
 
+// SEMI-01 / 2026-11-24 / 세미편집은 테스트 버튼이며 클릭한 블록만 원문으로 연다.
 // TOOLBAR-01~03: 승인된 선형 아이콘/배치, 3단계 폭 전환과 현재 문서 상태를 전역 툴바에 표시한다.
 sealed partial class MainForm
 {
@@ -83,6 +84,7 @@ sealed partial class MainForm
         {
             if (Current is { } tab) tab.HighlightBarVisible = !tab.HighlightBarVisible;
         });
+        Add("semi", "세미편집 (테스트)", "semi", ToggleSemiEdit);
         var close = Add("close", "현재 문서 닫기 (Ctrl+W)", "close", CloseCurrent);
         close.Alignment = ToolStripItemAlignment.Right;
         close.Overflow = ToolStripItemOverflow.Never;
@@ -108,6 +110,7 @@ sealed partial class MainForm
         "redo" => "다시 실행",
         "mode" => Current?.EditMode == true ? "편집 모드" : "VIEW 모드",
         "width" => Brand.DocWidthMode switch { DocumentWidthMode.Standard => "기본 폭 (46rem)", DocumentWidthMode.Wide => "넓게 (70rem)", _ => "창 맞춤" },
+        "semi" => Current?.SemiEdit == true ? "세미편집" : "세미편집 끄기",
         "find" => Current?.FindBarVisible == true ? "검색" : "검색 닫기",
         "highlight" => Current?.HighlightBarVisible == true ? "키워드 강조" : "키워드 강조 닫기",
         "close" => "현재 문서 닫기",
@@ -174,6 +177,8 @@ sealed partial class MainForm
             item.Font = Brand.MenuFont;
             SetToolIcon(item, mode switch { DocumentWidthMode.Standard => "fit", DocumentWidthMode.Wide => "wide", _ => "window" }, item.Checked ? Brand.FrameAccent : Brand.Ink);
         }
+        State("semi", tab?.CanSemiEdit == true, tab?.SemiEdit == true, "semi",
+            tab?.SemiEdit == true ? "세미편집 켜짐 · 클릭하면 끄기" : "세미편집 (테스트) · 클릭한 블록만 수정");
         State("find", text, tab?.FindBarVisible == true, "search");
         State("highlight", text, tab?.HighlightBarVisible == true, "highlight");
         State("close", document, icon: "close");
@@ -344,6 +349,7 @@ static class DocumentToolbarIcons
             case "wide": Box(2,3,20,18); L(6,7,6,17); L(18,7,18,17); L(8,12,16,12); L(8,12,10,10); L(8,12,10,14); L(16,12,14,10); L(16,12,14,14); break;
             case "window": Box(2,3,20,18); L(4,7,20,7); L(5,14,19,14); L(5,14,8,11); L(5,14,8,17); L(19,14,16,11); L(19,14,16,17); break;
             case "search": g.DrawEllipse(pen,3,3,12,12); L(13,13,21,21); break;
+            case "semi": L(4,18,14,8); L(14,8,18,4); L(18,4,20,6); L(20,6,10,16); L(10,16,4,18); L(7,15,9,17); break;
             case "highlight":
                 L(6,15,16,5); L(16,5,21,10); L(21,10,11,20); L(11,20,6,15); L(8,17,5,20); L(5,20,10,20); L(13,8,18,13);
                 using (var yellow = new Pen(Color.FromArgb(215,169,0),2.8f)) g.DrawLine(yellow,3,23,21,23); break;

@@ -7,6 +7,7 @@
 // 4. 변경 이력은 History.md에 일자별로 상세 기록 유지
 // ==============================================================================================
 // [요건 이력]
+// SEMI-01 / 2026-11-24 / VIEW에서 클릭한 블록만 원문으로 고쳐 기존 내용을 수정하고 새 줄을 추가한다.
 // TOOLBAR-10 / 2026-10-26 / 큰 기능명 안내를 창 하단 중앙에 배치하여 상단 아이콘 툴팁과 겹치지 않게 한다.
 // TOOLBAR-07 / 2026-10-26 / 아이콘 선택 시 큰 기능명을 잠시 표시한 뒤 서서히 지우고 연속 선택은 최신 이름으로 교체한다.
 // TOOLBAR-01 / 2026-10-26 / 승인된 선형 아이콘 툴바를 탭 위에 고정하고 파일·편집·보기·검색 순으로 배치한다.
@@ -1014,6 +1015,13 @@ sealed partial class MainForm : Form, IMessageFilter
         }
     }
 
+    void ToggleSemiEdit()
+    {
+        if (Current == null || !Current.CanSemiEdit) return;
+        Current.SemiEdit = !Current.SemiEdit;
+        SyncToolbar();
+    }
+
     public void EnterViewMode()
     {
         if (Current == null) return;
@@ -1684,6 +1692,25 @@ sealed class FileTab : Panel
     public bool CanUndoEdit => _editMode && !_text.ReadOnly && _text.CanUndo;
     public bool CanRedoEdit => _editMode && !_text.ReadOnly && _text.CanRedo;
     public bool CanSaveDocument => !IsBrowserDocument && !_largeEditorOnly;
+    public bool CanSemiEdit => !IsBrowserDocument && !MainForm.IsJson(Path) && !_largeEditorOnly;
+    public bool SemiEdit
+    {
+        get => _semiEdit;
+        set
+        {
+            if (value && !CanSemiEdit) return;
+            if (_semiEdit == value) return;
+            _semiEdit = value;
+            _semiEditing = false;
+            _suppressPreviewRefresh = false;
+            if (_web.CoreWebView2 != null)
+                _ = _web.CoreWebView2.ExecuteScriptAsync(value ? "semiOn(true)" : "semiOn(false)");
+            NotifyUiStateChanged();
+        }
+    }
+    bool _semiEdit;
+    bool _semiEditing;
+    bool IsSemiNormalized => string.IsNullOrEmpty(Path) || MainForm.IsMarkdownSource(Path);
 
     void NotifyUiStateChanged()
     {
@@ -2410,7 +2437,12 @@ sealed class FileTab : Panel
                     SyncEditorToWeb();
                 });
             }
-            BeginInvoke(() => ApplyHighlightKeywords());
+            BeginInvoke(() =>
+            {
+                ApplyHighlightKeywords();
+                if (web == _web && _semiEdit)
+                    _ = _web.CoreWebView2.ExecuteScriptAsync("semiOn(true)");
+            });
         };
         core.NavigationStarting += (_, e) =>
         {
@@ -2457,6 +2489,33 @@ sealed class FileTab : Panel
                 {
                     var isChecked = checkedValue.GetBoolean();
                     BeginInvoke(() => ToggleTaskAtLine(taskLine, isChecked));
+                    return;
+                }
+                if (type == "semiOpen" && _semiEdit &&
+                    root.TryGetProperty("start", out var semiStart) && semiStart.TryGetInt32(out var semiStartLine) &&
+                    root.TryGetProperty("end", out var semiEnd) && semiEnd.TryGetInt32(out var semiEndLine))
+                {
+                    BeginInvoke(() => BeginSemiEdit(semiStartLine, semiEndLine));
+                    return;
+                }
+                if (type == "semiAppend" && _semiEdit)
+                {
+                    BeginInvoke(() => { _ = AppendSemiLineAsync(); });
+                    return;
+                }
+                if (type == "semiCancel")
+                {
+                    BeginInvoke(() => { _semiEditing = false; _suppressPreviewRefresh = false; });
+                    return;
+                }
+                if (type == "semiCommit" && _semiEdit &&
+                    root.TryGetProperty("start", out var commitStart) && commitStart.TryGetInt32(out var commitStartLine) &&
+                    root.TryGetProperty("end", out var commitEnd) && commitEnd.TryGetInt32(out var commitEndLine))
+                {
+                    var commitText = root.TryGetProperty("text", out var commitTextValue) ? commitTextValue.GetString() ?? "" : "";
+                    var insertLine = root.TryGetProperty("insert", out var insertValue) && insertValue.ValueKind == System.Text.Json.JsonValueKind.True;
+                    var appendAfter = root.TryGetProperty("append", out var appendValue) && appendValue.ValueKind == System.Text.Json.JsonValueKind.True;
+                    BeginInvoke(() => { _ = CommitSemiEditAsync(commitStartLine, commitEndLine, commitText, insertLine, appendAfter); });
                     return;
                 }
                 if (type == "f8")
@@ -2907,6 +2966,70 @@ sealed class FileTab : Panel
             var js = "document.querySelectorAll('li[data-src-line=\"" + oneBasedLine + "\"] input[type=checkbox]').forEach(cb => cb.checked = " + boolStr + ");";
             _ = _web2.CoreWebView2.ExecuteScriptAsync(js);
         }
+    }
+
+    void BeginSemiEdit(int startLine, int endLine)
+    {
+        if (!_semiEdit || _web.CoreWebView2 == null) return;
+        _previewTick.Stop();
+        _semiEditing = true;
+        var text = ReadSemiRange(_text.Text, startLine, endLine, IsSemiNormalized);
+        var json = System.Text.Json.JsonSerializer.Serialize(text);
+        _ = _web.CoreWebView2.ExecuteScriptAsync("semiOpen(" + startLine + "," + endLine + "," + json + ")");
+    }
+
+    async Task CommitSemiEditAsync(int startLine, int endLine, string replacement, bool insertBlankAfter, bool appendAfter)
+    {
+        if (!_semiEdit) return;
+        var updated = ApplySemiEdit(_text.Text, startLine, endLine, replacement, insertBlankAfter, IsSemiNormalized, out var focusLine, out var changed);
+        _semiEditing = false;
+        _suppressPreviewRefresh = true;
+        try
+        {
+            if (changed) _text.Text = updated;
+        }
+        finally { _suppressPreviewRefresh = false; }
+        await UpdateOpenPreviewAsync();
+        if (!_semiEdit || _web.CoreWebView2 == null) return;
+        if (appendAfter)
+        {
+            await AppendSemiLineAsync();
+            return;
+        }
+        if (!insertBlankAfter) return;
+        _semiEditing = true;
+        var json = System.Text.Json.JsonSerializer.Serialize("");
+        await _web.CoreWebView2.ExecuteScriptAsync("semiOpen(" + focusLine + "," + (focusLine + 1) + "," + json + ")");
+    }
+
+    async Task AppendSemiLineAsync()
+    {
+        if (!_semiEdit) return;
+        var updated = AppendSemiLine(_text.Text, IsSemiNormalized, out var focusLine, out var changed);
+        _semiEditing = false;
+        _suppressPreviewRefresh = true;
+        try
+        {
+            if (changed) _text.Text = updated;
+        }
+        finally { _suppressPreviewRefresh = false; }
+        await UpdateOpenPreviewAsync();
+        if (!_semiEdit || _web.CoreWebView2 == null) return;
+        _semiEditing = true;
+        var json = System.Text.Json.JsonSerializer.Serialize("");
+        await _web.CoreWebView2.ExecuteScriptAsync("semiOpen(" + focusLine + "," + (focusLine + 1) + "," + json + ")");
+    }
+
+    async Task UpdateOpenPreviewAsync()
+    {
+        if (!_ready || IsBrowserDocument || _largeEditorOnly || _web.CoreWebView2 == null) return;
+        var jsonHtml = System.Text.Json.JsonSerializer.Serialize(BuildPreviewHtml());
+        int totalLines = Math.Max(1, CountLogicalLines(_text.Text));
+        int normTotal = ToNormLine(_text.Text, totalLines - 1) + 1;
+        var js = "updatePreviewContent(" + jsonHtml + ",0," + normTotal + ");if(document.body.classList.contains('semi-edit'))semiOn(true);";
+        await _web.CoreWebView2.ExecuteScriptAsync(js);
+        if (_web2.CoreWebView2 != null)
+            await _web2.CoreWebView2.ExecuteScriptAsync("updatePreviewContent(" + jsonHtml + ",0," + normTotal + ")");
     }
 
     void WrapSelection(string marker, string placeholder)
@@ -3999,6 +4122,7 @@ sealed class FileTab : Panel
 
     public void RefreshPreview(bool forceReload = false, bool preserveScroll = false)
     {
+        if (_semiEditing) return;
         if (!_ready) return;
         if (IsBrowserDocument)
         {
@@ -4172,10 +4296,18 @@ sealed class FileTab : Panel
     {
         var extension = System.Net.WebUtility.HtmlEncode(System.IO.Path.GetExtension(Path).TrimStart('.').ToUpperInvariant());
         var label = string.IsNullOrEmpty(extension) ? "TEXT" : extension + " · TEXT";
-        var encoded = System.Net.WebUtility.HtmlEncode(src);
+        var lines = src.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var body = new StringBuilder();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var encodedLine = System.Net.WebUtility.HtmlEncode(lines[i]);
+            if (encodedLine.Length == 0) encodedLine = " ";
+            body.Append("<div class='plain-line' data-src-line='").Append(i + 1).Append("'>")
+                .Append(encodedLine).Append("</div>");
+        }
         return "<div class='plain-text-view'>" +
             "<div class='plain-text-header'>" + label + " (원문 텍스트)</div>" +
-            "<pre class='plain-file'><code>" + encoded + "</code></pre></div>";
+            "<pre class='plain-file'><code>" + body + "</code></pre></div>";
     }
 
     string RenderHtml(string src)
@@ -4475,6 +4607,76 @@ sealed class FileTab : Panel
         return Math.Max(0, lines.Length - 1);
     }
 
+    // SEMI-01: data-src-line 구간만 원문으로 바꾼다. Enter는 그 뒤에 빈 줄을 넣는다.
+    public static string ReadSemiRange(string source, int startLine, int endLineExclusive, bool normalized)
+    {
+        var src = NormalizeNewlines(source);
+        var lines = src.Split('\n');
+        int start = SemiIndex(src, startLine, normalized, lines.Length);
+        int end = SemiEnd(src, endLineExclusive, normalized, lines.Length, start);
+        if (start >= lines.Length) return "";
+        return string.Join("\n", lines.Skip(start).Take(end - start));
+    }
+
+    public static string ApplySemiEdit(string source, int startLine, int endLineExclusive, string replacement, bool insertBlankAfter, bool normalized, out int focusLine, out bool changed)
+    {
+        var src = NormalizeNewlines(source);
+        var lines = src.Split('\n').ToList();
+        int start = SemiIndex(src, startLine, normalized, lines.Count);
+        int end = SemiEnd(src, endLineExclusive, normalized, lines.Count, start);
+        if (start == lines.Count) lines.Add("");
+        if (end > lines.Count) end = lines.Count;
+        var parts = NormalizeNewlines(replacement ?? "").Split('\n');
+        lines.RemoveRange(start, end - start);
+        lines.InsertRange(start, parts);
+        int focus = start + parts.Length - 1;
+        if (insertBlankAfter)
+        {
+            lines.Insert(focus + 1, "");
+            focus++;
+        }
+        var text = string.Join("\n", lines);
+        focusLine = normalized ? ToNormLine(text, Math.Max(0, focus)) + 1 : focus + 1;
+        changed = text != src;
+        return changed ? text : source;
+    }
+
+    public static string AppendSemiLine(string source, bool normalized, out int focusLine, out bool changed)
+    {
+        var src = NormalizeNewlines(source);
+        var lines = src.Split('\n').ToList();
+        if (lines.Count == 0 || lines[^1].Length == 0)
+        {
+            focusLine = lines.Count == 0 ? 1 : (normalized ? ToNormLine(src, lines.Count - 1) + 1 : lines.Count);
+            changed = false;
+            return source;
+        }
+        lines.Add("");
+        var text = string.Join("\n", lines);
+        focusLine = normalized ? ToNormLine(text, lines.Count - 1) + 1 : lines.Count;
+        changed = true;
+        return text;
+    }
+
+    static string NormalizeNewlines(string source) => (source ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
+
+    static int SemiIndex(string src, int oneBased, bool normalized, int count)
+    {
+        if (oneBased <= 0) return 0;
+        int index = oneBased - 1;
+        if (!normalized) return Math.Clamp(index, 0, count);
+        return Math.Clamp(FromNormLine(src, index), 0, count);
+    }
+
+    static int SemiEnd(string src, int endLineExclusive, bool normalized, int count, int start)
+    {
+        int end = endLineExclusive >= 1_000_000 ? count : SemiIndex(src, endLineExclusive, normalized, count);
+        if (end < start) end = start;
+        if (end == start) end = Math.Min(count, start + 1);
+        if (start == count) end = count + 1;
+        return end;
+    }
+
     static string NormalizeMd(string src)
     {
         if (string.IsNullOrEmpty(src)) return src;
@@ -4533,6 +4735,12 @@ sealed class FileTab : Panel
          "#md-position-rail{position:fixed;left:0;top:0;bottom:0;width:24px;background:#edf0f4;border-right:1px solid #d4dae2;box-sizing:border-box;pointer-events:none;user-select:none;z-index:1000;}" +
          "#md-cursor-indicator{position:absolute;left:8px;top:0;width:8px;height:12px;clip-path:polygon(0 0,100% 50%,0 100%);background:" + Brand.CursorActiveAccentHex + ";transform:translateY(-50%);pointer-events:none;user-select:none;}" +
          ".task-list-item input[type=checkbox]{width:15px;height:15px;margin:0 .45em 0 0;vertical-align:-2px;accent-color:" + Brand.CheckboxAccentHex + ";cursor:pointer;}" +
+         "body.semi-edit article.md [data-src-line]{cursor:text}" +
+         "body.semi-edit article.md [data-src-line]:hover{outline:1px dashed rgba(3,90,166,.45);outline-offset:2px}" +
+         ".semi-line{width:100%;box-sizing:border-box;font:15px/1.5 Consolas,'Malgun Gothic',monospace;padding:6px 8px;border:1px solid #035AA6;border-radius:6px;resize:vertical;background:#fff;color:#1a1a1a}" +
+         ".semi-tip{margin-top:4px;font-size:12px;color:#667}" +
+         ".semi-add{display:block;margin:16px 0;padding:8px 12px;border:1px dashed #8aa;background:transparent;color:inherit;cursor:pointer;border-radius:8px}" +
+         ".plain-line{white-space:pre-wrap}" +
          ".markdown-alert{margin:1em 0;padding:.7em 1em;border:1px solid #d8d8dc;border-left:4px solid #888;border-radius:8px;background:#fff;}" +
          ".markdown-alert-note{border-left-color:#268bd2}.markdown-alert-tip{border-left-color:#2e9d59}.markdown-alert-warning{border-left-color:#d08a00}.markdown-alert-important{border-left-color:#8250df}.markdown-alert-caution{border-left-color:#d1242f}" +
          ".markdown-alert-title{margin:0 0 .25em;font-weight:700;color:#444;}" +
@@ -4597,7 +4805,7 @@ sealed class FileTab : Panel
          "*{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}" +
          "html,body,body.multi-col:not(.md-edit-position),body.md-edit-position{width:auto !important;height:auto !important;margin:0 !important;padding:0 !important;overflow:visible !important;}" +
          "body .md,body.multi-col:not(.md-edit-position) .md{max-width:none !important;width:100% !important;height:auto !important;margin:0 !important;padding:0 !important;columns:auto !important;column-count:1 !important;column-width:auto !important;overflow:visible !important;}" +
-         "#md-position-rail,#md-cursor-indicator,.copy-code-btn{display:none !important;}" +
+         "#md-position-rail,#md-cursor-indicator,.copy-code-btn,.semi-editor,.semi-add{display:none !important;}" +
          ".md-table-wrap,.json-view,pre,.katex-display{overflow:visible !important;max-height:none !important;}" +
          "pre,.json-view,.code-line{white-space:pre-wrap !important;overflow-wrap:anywhere !important;}" +
          "body .md img,body.multi-col:not(.md-edit-position) img{max-height:none !important;max-width:100% !important;}" +
@@ -4827,17 +5035,75 @@ sealed class FileTab : Panel
         "if(Array.isArray(__lastKeywords)&&__lastKeywords.length>0){applyHighlightKeywords(__lastKeywords);}" +
         "if(cursorLine&&cursorLine>0){scrollToCursorLine(cursorLine,totalLines);}" +
         "else{if(!window.__mdPreserveEditScroll)clearCursorHighlight();window.scrollTo(0,prevY);}" +
+        "if(document.body.classList.contains('semi-edit'))ensureSemiAdd();" +
         "}}" +
+        "function ensureSemiAdd(){" +
+        "const art=document.querySelector('article.md');" +
+        "if(!art||!document.body.classList.contains('semi-edit')||art.querySelector('.semi-add'))return;" +
+        "const hint=document.createElement('button');hint.type='button';hint.className='semi-add';hint.textContent='새 줄 추가';" +
+        "hint.addEventListener('click',ev=>{ev.preventDefault();ev.stopPropagation();" +
+        "if(document.querySelector('.semi-editor')){document.querySelector('.semi-editor').dataset.append='1';semiSend(false);return;}" +
+        "chrome.webview.postMessage(JSON.stringify({t:'semiAppend'}));});" +
+        "art.appendChild(hint);" +
+        "}" +
+        "function semiOn(on){" +
+        "document.body.classList.toggle('semi-edit',!!on);" +
+        "if(!on){document.querySelectorAll('.semi-editor,.semi-add').forEach(n=>n.remove());document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});}" +
+        "else ensureSemiAdd();" +
+        "}" +
+        "function semiRangeOf(el){" +
+        "const start=parseInt(el.getAttribute('data-src-line'),10)||1;let end=2147483647;" +
+        "document.querySelectorAll('[data-src-line]').forEach(n=>{if(n===el||el.contains(n))return;const ln=parseInt(n.getAttribute('data-src-line'),10)||0;if(ln>start&&ln<end)end=ln;});" +
+        "return {start:start,end:end};" +
+        "}" +
+        "function semiOpen(start,end,text){" +
+        "document.querySelectorAll('.semi-editor').forEach(n=>n.remove());" +
+        "document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});" +
+        "const box=document.createElement('textarea');box.className='semi-line';box.value=text==null?'':String(text);" +
+        "box.rows=Math.min(14,Math.max(1,box.value.split('\\n').length));" +
+        "const wrap=document.createElement('div');wrap.className='semi-editor';wrap.dataset.start=String(start);wrap.dataset.end=String(end);" +
+        "wrap.appendChild(box);const tip=document.createElement('div');tip.className='semi-tip';" +
+        "tip.textContent='Enter 새 줄 · Shift+Enter 줄바꿈 · Ctrl+Enter 반영 · Esc 취소';wrap.appendChild(tip);" +
+        "const host=[...document.querySelectorAll('[data-src-line]')].find(n=>parseInt(n.getAttribute('data-src-line'),10)===start);" +
+        "if(host){host.classList.add('semi-host');host.style.display='none';host.insertAdjacentElement('afterend',wrap);}" +
+        "else{const art=document.querySelector('article.md');if(art)art.insertBefore(wrap,art.querySelector('.semi-add'));}" +
+        "box.addEventListener('keydown',e=>{" +
+        "if(e.key==='Escape'){e.preventDefault();e.stopPropagation();semiCancel();return;}" +
+        "if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();e.stopPropagation();semiSend(false);return;}" +
+        "if(e.key==='Enter'&&!e.shiftKey&&!e.altKey&&!e.ctrlKey&&box.value.indexOf('\\n')<0){e.preventDefault();e.stopPropagation();semiSend(true);}" +
+        "});" +
+        "box.addEventListener('blur',()=>{setTimeout(()=>{if(wrap.isConnected&&document.activeElement!==box)semiSend(false);},160);});" +
+        "box.focus();const n=box.value.length;box.setSelectionRange(n,n);" +
+        "}" +
+        "function semiCancel(){" +
+        "document.querySelectorAll('.semi-editor').forEach(n=>n.remove());" +
+        "document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});" +
+        "chrome.webview.postMessage(JSON.stringify({t:'semiCancel'}));" +
+        "}" +
+        "function semiSend(insert){" +
+        "const wrap=document.querySelector('.semi-editor');if(!wrap)return;" +
+        "const box=wrap.querySelector('textarea');" +
+        "const start=parseInt(wrap.dataset.start,10)||1;const end=parseInt(wrap.dataset.end,10)||(start+1);" +
+        "const append=wrap.dataset.append==='1';const text=box?box.value:'';" +
+        "wrap.remove();document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});" +
+        "chrome.webview.postMessage(JSON.stringify({t:'semiCommit',start:start,end:end,text:text,insert:!!insert,append:append}));" +
+        "}" +
         // 실제 사용자의 일반 왼쪽 클릭만 편집 위치 이동으로 해석한다.
-        // 링크/버튼/체크박스, 드래그 선택, 스크립트 click()은 각자의 동작을 유지한다.
+        // 세미편집에서는 클릭한 블록만 원문 입력으로 연다. 링크/버튼/체크박스와 드래그 선택은 유지한다.
         "window.addEventListener('click',e=>{" +
         "if(!e.isTrusted||e.button!==0||e.ctrlKey||e.shiftKey||e.altKey||e.metaKey)return;" +
-        "const target=e.target instanceof Element?e.target:null;" +
-        "if(!target||target.closest('a,button,input,select,textarea,summary,[contenteditable]'))return;" +
-        "const selection=window.getSelection();if(selection&&!selection.isCollapsed)return;" +
+        "const target=e.target instanceof Element?e.target:null;if(!target)return;" +
+        "if(document.body.classList.contains('semi-edit')){" +
+        "if(target.closest('.semi-editor,.semi-add,a,button,input,select,summary'))return;" +
         "const block=target.closest('[data-src-line]');" +
-        "if(!block||!block.closest('article.md'))return;" +
-        "const ln=parseInt(block.getAttribute('data-src-line'),10);" +
+        "if(document.querySelector('.semi-editor')){if(block){const r=semiRangeOf(block);const wrap=document.querySelector('.semi-editor');if(wrap&&parseInt(wrap.dataset.start,10)===r.start)return;}semiSend(false);return;}" +
+        "if(!block){if(target.closest('article.md'))chrome.webview.postMessage(JSON.stringify({t:'semiAppend'}));return;}" +
+        "const range=semiRangeOf(block);chrome.webview.postMessage(JSON.stringify({t:'semiOpen',start:range.start,end:range.end}));return;}" +
+        "if(target.closest('a,button,input,select,textarea,summary,[contenteditable]'))return;" +
+        "const selection=window.getSelection();if(selection&&!selection.isCollapsed)return;" +
+        "const lineBlock=target.closest('[data-src-line]');" +
+        "if(!lineBlock||!lineBlock.closest('article.md'))return;" +
+        "const ln=parseInt(lineBlock.getAttribute('data-src-line'),10);" +
         "if(ln>0)chrome.webview.postMessage(JSON.stringify({t:'clickLine',ln:ln,userInitiated:true}));" +
         "});" +
         // 이미지 로드나 레이아웃 갱신으로 발생한 scroll 이벤트도 미리보기 안에서만 처리한다.
