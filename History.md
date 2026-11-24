@@ -12,6 +12,7 @@ v1.3.8(2026-10-26) 이후 오늘까지의 변경을 공개 릴리스로 묶습�
 - VIEW 세미편집 테스트 모드. 상단 버튼으로 켜면 클릭한 블록만 원문으로 수정하고, Enter와 **새 줄 추가**로 새 내용을 넣는다.
 - README에 편집 모드(F8)와 세미편집 사용법을 추가하고, 버전·다운로드를 1.3.9로 갱신한다.
 - 프로젝트 버전 1.3.9. 이전 릴리스의 인쇄·툴바·화면 동작은 그대로 둔다.
+- GitHub 공개 배포: [v1.3.9 Release](https://github.com/JeBum/MdViewer/releases/tag/v1.3.9)에 `MDviewer.exe` 등록. 태그 소스 `bef203b`에서 빌드하여 파일 버전 1.3.9.0과 제품 버전의 커밋 일치를 확인. 크기 76,809,188 bytes, SHA256 `D807D773CBEBF1E7C38846AA9BD9EE69B6F2B49027BF62AF1B9FC5605B341AA7`. 상세 결과: `verification/GITHUB-RELEASE-RESULTS.md`.
 
 ---
 
