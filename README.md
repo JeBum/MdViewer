@@ -10,9 +10,9 @@ https://github.com/JeBum/MdViewer
 
 MDviewer는 Windows에서 Markdown 문서를 편집하고, 실시간으로 보기 좋게 렌더링하며, Word 문서로 내보낼 수 있는 가벼운 데스크톱 앱입니다.
 
-현재 소스·로컬 빌드 버전: **1.3.9** (2026-11-24). 변경 내역은 [History.md](History.md)를 참조하세요.
+현재 소스·로컬 빌드 버전: **1.3.10** (2026-11-24). 변경 내역은 [History.md](History.md)를 참조하세요.
 
-**Windows x64 다운로드:** [MDviewer.exe — v1.3.9](https://github.com/JeBum/MdViewer/releases/download/v1.3.9/MDviewer.exe) · [릴리스 노트](https://github.com/JeBum/MdViewer/releases/tag/v1.3.9)
+**Windows x64 다운로드:** [MDviewer.exe — v1.3.10](https://github.com/JeBum/MdViewer/releases/download/v1.3.10/MDviewer.exe) · [릴리스 노트](https://github.com/JeBum/MdViewer/releases/tag/v1.3.10)
 
 별도 웹 뷰어는 [web/README.md](web/README.md)에 설치·실행 방법이 있습니다. Windows 앱은 다이어그램 서버를 호출하지 않습니다. Mermaid만 실행 파일에 들어 있는 스크립트로 그리고, PlantUML·Graphviz/DOT·ZenUML·Kroki 코드 블록은 원문 코드로 둡니다. 웹 뷰어는 Mermaid와 Graphviz(DOT)를 앱 안에서 그립니다.
 
@@ -91,10 +91,10 @@ PDF는 WebView2 PDF 뷰어로, 이미지와 미디어는 파일 주소를 그대
 | 파일 | 새 문서 · 열기 · 저장 · 인쇄 |
 | 편집 이력 | 실행 취소 · 다시 실행 |
 | 보기 | VIEW/편집 모드 토글 · 문서 폭 선택 |
-| 검색·강조 | 검색 패널 · 키워드 강조 패널 · 세미편집(테스트) |
+| 검색·강조 | 검색 패널 · 키워드 강조 패널 |
 | 맨 오른쪽 | 현재 문서 닫기 |
 
-편집은 두 가지입니다. 전체 원문을 고치는 **편집 모드**와, 화면에서 한 블록만 고치는 **세미편집**입니다. 세미편집 사용법은 [편집 모드](#편집-모드)를 보세요.
+편집은 두 가지입니다. 전체 원문을 고치는 **편집 모드**와, 화면에서 한 블록만 고치는 **세미편집**입니다. 세미편집은 텍스트 문서에서 기본으로 켜져 있습니다. 사용법은 [편집 모드](#편집-모드)를 보세요.
 
 문서 폭 아이콘을 클릭하면 **기본(46rem) → 넓게(70rem) → 창 맞춤**으로 순환합니다. 옆 화살표 메뉴에서 직접 선택할 수도 있습니다. 문서 폭은 본문의 너비 설정이며, 우클릭 메뉴의 **다단 보기(1단/2단/3단/자동)**와는 별도입니다. 화면 기본값은 창 맞춤, 본문 여백은 상하좌우 12px입니다. 일반 본문은 자동 줄바꿈하고 넓은 표·도표는 가로로 스크롤합니다.
 
@@ -111,18 +111,23 @@ PDF는 WebView2 PDF 뷰어로, 이미지와 미디어는 파일 주소를 그대
 - `Ctrl+B` 굵게, `Ctrl+I` 기울임, `Ctrl+K` 링크. 선택이 없으면 자리 표시 문구를 넣습니다.
 - 목록 줄 끝에서 `Enter`를 누르면 다음 항목이 이어지고, 빈 항목에서 `Enter`를 누르면 목록이 끝납니다.
 - `Tab` / `Shift+Tab`으로 목록을 들여쓰거나 내어씁니다.
-- 미리보기를 왼쪽 클릭하면 그 원문 줄로 커서가 이동합니다. 링크, 버튼, 체크박스, 드래그 선택은 이동하지 않습니다.
+- 텍스트 문서에서 본문을 클릭하면 그 블록이 세미편집으로 열립니다. 링크, 버튼, 체크박스, 드래그 선택은 열리지 않습니다.
 - 편집을 끄면 분할이 해제되고 단일 VIEW로 돌아갑니다. 스크롤 위치는 유지됩니다.
 
-### 세미편집 (테스트)
+### 세미편집
 
-툴바의 **세미편집** 버튼으로 켭니다. VIEW를 유지한 채, 클릭한 블록만 원문 입력칸으로 바꿉니다. 화면의 HTML을 직접 고치지 않으므로 Markdown 문법은 원문에 남습니다.
+텍스트 문서에서는 기본으로 켜져 있고 따로 버튼은 없습니다. VIEW를 유지한 채, 클릭한 블록만 원문 입력칸으로 바꿉니다. 화면의 HTML을 직접 고치지 않으므로 Markdown 문법은 원문에 남습니다.
+
+![세미편집](./Screenshots/SEMI-EDIT.png)
 
 - 한 줄 블록은 그 줄만 열립니다. 문단, 코드, 표처럼 여러 줄인 블록은 그 구간만 열립니다.
+- 줄바꿈 없이 긴 문단은 화면 너비에 맞춰 입력칸이 늘어나고, 커서는 클릭한 곳에 있습니다. 16줄을 넘기면 칸 안에서 스크롤합니다.
+- 표의 셀을 클릭하면 그 행은 그대로 두고, 바로 아래에 그 행의 원문이 열립니다. 커서는 클릭한 셀에 있습니다. 셀이 매우 길어도 입력칸은 최대 높이까지만 늘어나고 나머지는 칸 안에서 스크롤합니다.
+- 편집칸 글자는 본문 15.5px보다 한 단계 작은 14px입니다.
 - 한 줄 입력에서 `Enter`는 반영한 뒤 다음 빈 줄을 엽니다.
 - `Shift+Enter`는 블록 안에서 줄을 나누고, `Ctrl+Enter`는 반영, `Esc`는 취소입니다.
 - 문서 아래 **새 줄 추가**로 끝에 새 내용을 넣습니다.
-- JSON, PDF, 이미지, 미디어, 대용량 부분 로드에서는 버튼이 꺼집니다.
+- JSON, PDF, 이미지, 미디어, 대용량 부분 로드에서는 세미편집이 꺼집니다.
 
 ## 테마 인쇄와 PDF 저장
 
@@ -165,7 +170,7 @@ PDF는 WebView2 PDF 뷰어로, 이미지와 미디어는 파일 주소를 그대
 | `web/` | Windows 앱과 따로 실행하는 다이어그램 웹 뷰어 |
 | `verification/` | 회귀 검사와 결과 기록 |
 
-공개 배포 버전은 [v1.3.9](https://github.com/JeBum/MdViewer/releases/tag/v1.3.9)이며 Assets에서 `MDviewer.exe`를 다운로드할 수 있습니다. 파일 버전은 **1.3.9.0**입니다. 현재 소스의 로컬 빌드 결과는 `publish\MDviewer.exe`입니다. 배포 파일의 SHA256과 소스 커밋은 [GitHub Release 검증 기록](verification/GITHUB-RELEASE-RESULTS.md)을 참조하세요.
+공개 배포 버전은 [v1.3.10](https://github.com/JeBum/MdViewer/releases/tag/v1.3.10)이며 Assets에서 `MDviewer.exe`를 다운로드할 수 있습니다. 파일 버전은 **1.3.10.0**입니다. 현재 소스의 로컬 빌드 결과는 `publish\MDviewer.exe`입니다. 배포 파일의 SHA256과 소스 커밋은 [GitHub Release 검증 기록](verification/GITHUB-RELEASE-RESULTS.md)을 참조하세요.
 
 release.bat은 실행 중인 MDviewer를 종료한 뒤 `publish\MDviewer.exe`를 새로 생성합니다. 실행 파일이 계속 잠겨 있으면 별도 폴더를 만들지 않고 오류로 중단합니다. 구형 빌드·설치 스크립트는 저장소에서 제거되었습니다.
 
@@ -273,7 +278,7 @@ release.bat은 실행 중인 MDviewer를 종료한 뒤 `publish\MDviewer.exe`를
 
 ## 검증 기록
 
-1.3.9 세미편집 검사 SEMI-01~04가 통과했습니다. 전체 회귀 검사는 154개 통과·28개 실패이며, 실패 항목은 1.3.8 이전에 있던 회귀와 같습니다. 전체 검사가 모두 통과한 상태는 아닙니다. 상세 내용은 [History.md](History.md)와 [테스트 케이스](verification/TEST-CASES.md)를 참조하세요.
+세미편집 검사 SEMI-01~07이 통과했습니다. 전체 회귀 검사는 157개 통과·28개 실패이며, 실패 항목은 1.3.8 이전에 있던 회귀와 같습니다. 전체 검사가 모두 통과한 상태는 아닙니다. 상세 내용은 [History.md](History.md)와 [테스트 케이스](verification/TEST-CASES.md)를 참조하세요.
 
 ```powershell
 # 전체 회귀 검사

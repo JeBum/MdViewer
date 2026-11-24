@@ -8,6 +8,9 @@
 // ==============================================================================================
 // [요건 이력]
 // SEMI-01 / 2026-11-24 / VIEW에서 클릭한 블록만 원문으로 고쳐 기존 내용을 수정하고 새 줄을 추가한다.
+// SEMI-05 / 2026-11-24 / 긴 단락과 긴 표 셀은 내용이 보이게 칸을 늘리고 클릭한 곳에 커서를 둔다.
+// SEMI-07 / 2026-11-24 / 편집칸 글자를 한 단계 작게 하고 표 행은 그대로 둔 채 그 행 바로 아래에 연다.
+// SEMI-08 / 2026-11-24 / 세미편집은 텍스트 문서에서 기본으로 켜고 툴바 버튼은 없앤다.
 // TOOLBAR-10 / 2026-10-26 / 큰 기능명 안내를 창 하단 중앙에 배치하여 상단 아이콘 툴팁과 겹치지 않게 한다.
 // TOOLBAR-07 / 2026-10-26 / 아이콘 선택 시 큰 기능명을 잠시 표시한 뒤 서서히 지우고 연속 선택은 최신 이름으로 교체한다.
 // TOOLBAR-01 / 2026-10-26 / 승인된 선형 아이콘 툴바를 탭 위에 고정하고 파일·편집·보기·검색 순으로 배치한다.
@@ -1015,13 +1018,6 @@ sealed partial class MainForm : Form, IMessageFilter
         }
     }
 
-    void ToggleSemiEdit()
-    {
-        if (Current == null || !Current.CanSemiEdit) return;
-        Current.SemiEdit = !Current.SemiEdit;
-        SyncToolbar();
-    }
-
     public void EnterViewMode()
     {
         if (Current == null) return;
@@ -1693,22 +1689,7 @@ sealed class FileTab : Panel
     public bool CanRedoEdit => _editMode && !_text.ReadOnly && _text.CanRedo;
     public bool CanSaveDocument => !IsBrowserDocument && !_largeEditorOnly;
     public bool CanSemiEdit => !IsBrowserDocument && !MainForm.IsJson(Path) && !_largeEditorOnly;
-    public bool SemiEdit
-    {
-        get => _semiEdit;
-        set
-        {
-            if (value && !CanSemiEdit) return;
-            if (_semiEdit == value) return;
-            _semiEdit = value;
-            _semiEditing = false;
-            _suppressPreviewRefresh = false;
-            if (_web.CoreWebView2 != null)
-                _ = _web.CoreWebView2.ExecuteScriptAsync(value ? "semiOn(true)" : "semiOn(false)");
-            NotifyUiStateChanged();
-        }
-    }
-    bool _semiEdit;
+    public bool SemiEdit => CanSemiEdit;
     bool _semiEditing;
     bool IsSemiNormalized => string.IsNullOrEmpty(Path) || MainForm.IsMarkdownSource(Path);
 
@@ -2437,12 +2418,7 @@ sealed class FileTab : Panel
                     SyncEditorToWeb();
                 });
             }
-            BeginInvoke(() =>
-            {
-                ApplyHighlightKeywords();
-                if (web == _web && _semiEdit)
-                    _ = _web.CoreWebView2.ExecuteScriptAsync("semiOn(true)");
-            });
+            BeginInvoke(() => ApplyHighlightKeywords());
         };
         core.NavigationStarting += (_, e) =>
         {
@@ -2491,14 +2467,14 @@ sealed class FileTab : Panel
                     BeginInvoke(() => ToggleTaskAtLine(taskLine, isChecked));
                     return;
                 }
-                if (type == "semiOpen" && _semiEdit &&
+                if (type == "semiOpen" && SemiEdit &&
                     root.TryGetProperty("start", out var semiStart) && semiStart.TryGetInt32(out var semiStartLine) &&
                     root.TryGetProperty("end", out var semiEnd) && semiEnd.TryGetInt32(out var semiEndLine))
                 {
                     BeginInvoke(() => BeginSemiEdit(semiStartLine, semiEndLine));
                     return;
                 }
-                if (type == "semiAppend" && _semiEdit)
+                if (type == "semiAppend" && SemiEdit)
                 {
                     BeginInvoke(() => { _ = AppendSemiLineAsync(); });
                     return;
@@ -2508,7 +2484,7 @@ sealed class FileTab : Panel
                     BeginInvoke(() => { _semiEditing = false; _suppressPreviewRefresh = false; });
                     return;
                 }
-                if (type == "semiCommit" && _semiEdit &&
+                if (type == "semiCommit" && SemiEdit &&
                     root.TryGetProperty("start", out var commitStart) && commitStart.TryGetInt32(out var commitStartLine) &&
                     root.TryGetProperty("end", out var commitEnd) && commitEnd.TryGetInt32(out var commitEndLine))
                 {
@@ -2970,7 +2946,7 @@ sealed class FileTab : Panel
 
     void BeginSemiEdit(int startLine, int endLine)
     {
-        if (!_semiEdit || _web.CoreWebView2 == null) return;
+        if (!SemiEdit || _web.CoreWebView2 == null) return;
         _previewTick.Stop();
         _semiEditing = true;
         var text = ReadSemiRange(_text.Text, startLine, endLine, IsSemiNormalized);
@@ -2980,7 +2956,7 @@ sealed class FileTab : Panel
 
     async Task CommitSemiEditAsync(int startLine, int endLine, string replacement, bool insertBlankAfter, bool appendAfter)
     {
-        if (!_semiEdit) return;
+        if (!SemiEdit) return;
         var updated = ApplySemiEdit(_text.Text, startLine, endLine, replacement, insertBlankAfter, IsSemiNormalized, out var focusLine, out var changed);
         _semiEditing = false;
         _suppressPreviewRefresh = true;
@@ -2990,7 +2966,7 @@ sealed class FileTab : Panel
         }
         finally { _suppressPreviewRefresh = false; }
         await UpdateOpenPreviewAsync();
-        if (!_semiEdit || _web.CoreWebView2 == null) return;
+        if (!SemiEdit || _web.CoreWebView2 == null) return;
         if (appendAfter)
         {
             await AppendSemiLineAsync();
@@ -3004,7 +2980,7 @@ sealed class FileTab : Panel
 
     async Task AppendSemiLineAsync()
     {
-        if (!_semiEdit) return;
+        if (!SemiEdit) return;
         var updated = AppendSemiLine(_text.Text, IsSemiNormalized, out var focusLine, out var changed);
         _semiEditing = false;
         _suppressPreviewRefresh = true;
@@ -3014,7 +2990,7 @@ sealed class FileTab : Panel
         }
         finally { _suppressPreviewRefresh = false; }
         await UpdateOpenPreviewAsync();
-        if (!_semiEdit || _web.CoreWebView2 == null) return;
+        if (!SemiEdit || _web.CoreWebView2 == null) return;
         _semiEditing = true;
         var json = System.Text.Json.JsonSerializer.Serialize("");
         await _web.CoreWebView2.ExecuteScriptAsync("semiOpen(" + focusLine + "," + (focusLine + 1) + "," + json + ")");
@@ -4120,6 +4096,14 @@ sealed class FileTab : Panel
         catch { }
     }
 
+    string PreviewDocument(string html)
+    {
+        var doc = WrapHtml(html);
+        if (SemiEdit)
+            doc = doc.Replace("<body class='", "<body class='semi-edit ");
+        return doc;
+    }
+
     public void RefreshPreview(bool forceReload = false, bool preserveScroll = false)
     {
         if (_semiEditing) return;
@@ -4150,7 +4134,7 @@ sealed class FileTab : Panel
             }
             else
             {
-                var doc = WrapHtml(html);
+                var doc = PreviewDocument(html);
                 NavigatePreviewDocument(_web, doc);
             }
 
@@ -4164,7 +4148,7 @@ sealed class FileTab : Panel
                 }
                 else
                 {
-                    var doc = WrapHtml(html);
+                    var doc = PreviewDocument(html);
                     NavigatePreviewDocument(_web2, doc);
                 }
             }
@@ -4737,7 +4721,9 @@ sealed class FileTab : Panel
          ".task-list-item input[type=checkbox]{width:15px;height:15px;margin:0 .45em 0 0;vertical-align:-2px;accent-color:" + Brand.CheckboxAccentHex + ";cursor:pointer;}" +
          "body.semi-edit article.md [data-src-line]{cursor:text}" +
          "body.semi-edit article.md [data-src-line]:hover{outline:1px dashed rgba(3,90,166,.45);outline-offset:2px}" +
-         ".semi-line{width:100%;box-sizing:border-box;font:15px/1.5 Consolas,'Malgun Gothic',monospace;padding:6px 8px;border:1px solid #035AA6;border-radius:6px;resize:vertical;background:#fff;color:#1a1a1a}" +
+         ".semi-editor{display:block;width:100%;margin:.4em 0}" +
+         "tr.semi-editor-row>td{padding:4px 6px !important;border:none !important;background:transparent !important}" +
+         ".semi-line{width:100%;box-sizing:border-box;font:14px/1.5 Consolas,'Malgun Gothic',monospace;padding:6px 8px;border:1px solid #035AA6;border-radius:6px;resize:vertical;background:#fff;color:#1a1a1a;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;max-height:50vh;overflow:auto}" +
          ".semi-tip{margin-top:4px;font-size:12px;color:#667}" +
          ".semi-add{display:block;margin:16px 0;padding:8px 12px;border:1px dashed #8aa;background:transparent;color:inherit;cursor:pointer;border-radius:8px}" +
          ".plain-line{white-space:pre-wrap}" +
@@ -4805,7 +4791,7 @@ sealed class FileTab : Panel
          "*{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}" +
          "html,body,body.multi-col:not(.md-edit-position),body.md-edit-position{width:auto !important;height:auto !important;margin:0 !important;padding:0 !important;overflow:visible !important;}" +
          "body .md,body.multi-col:not(.md-edit-position) .md{max-width:none !important;width:100% !important;height:auto !important;margin:0 !important;padding:0 !important;columns:auto !important;column-count:1 !important;column-width:auto !important;overflow:visible !important;}" +
-         "#md-position-rail,#md-cursor-indicator,.copy-code-btn,.semi-editor,.semi-add{display:none !important;}" +
+         "#md-position-rail,#md-cursor-indicator,.copy-code-btn,.semi-editor,.semi-add,tr.semi-editor-row{display:none !important;}" +
          ".md-table-wrap,.json-view,pre,.katex-display{overflow:visible !important;max-height:none !important;}" +
          "pre,.json-view,.code-line{white-space:pre-wrap !important;overflow-wrap:anywhere !important;}" +
          "body .md img,body.multi-col:not(.md-edit-position) img{max-height:none !important;max-width:100% !important;}" +
@@ -5046,9 +5032,14 @@ sealed class FileTab : Panel
         "chrome.webview.postMessage(JSON.stringify({t:'semiAppend'}));});" +
         "art.appendChild(hint);" +
         "}" +
+        "function semiClear(){" +
+        "document.querySelectorAll('tr.semi-editor-row').forEach(n=>n.remove());" +
+        "document.querySelectorAll('.semi-editor').forEach(n=>n.remove());" +
+        "document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});" +
+        "}" +
         "function semiOn(on){" +
         "document.body.classList.toggle('semi-edit',!!on);" +
-        "if(!on){document.querySelectorAll('.semi-editor,.semi-add').forEach(n=>n.remove());document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});}" +
+        "if(!on){semiClear();document.querySelectorAll('.semi-add').forEach(n=>n.remove());}" +
         "else ensureSemiAdd();" +
         "}" +
         "function semiRangeOf(el){" +
@@ -5056,28 +5047,86 @@ sealed class FileTab : Panel
         "document.querySelectorAll('[data-src-line]').forEach(n=>{if(n===el||el.contains(n))return;const ln=parseInt(n.getAttribute('data-src-line'),10)||0;if(ln>start&&ln<end)end=ln;});" +
         "return {start:start,end:end};" +
         "}" +
+        // SEMI-05: 줄바꿈 없는 긴 문단과 긴 표 셀도 화면 너비만큼 펼치고, 커서는 클릭한 곳에 둔다.
+        "function semiBoxWidth(box){" +
+        "let width=box.clientWidth;" +
+        "if(width<40&&box.parentElement)width=box.parentElement.clientWidth;" +
+        "if(width<40){const art=document.querySelector('article.md')||document.body;width=Math.max(240,art.clientWidth-24);}" +
+        "return width;" +
+        "}" +
+        "function semiVisualLines(text,width,style){" +
+        "const probe=document.createElement('div');" +
+        "probe.style.cssText='position:fixed;left:-10000px;top:0;visibility:hidden;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;box-sizing:border-box;';" +
+        "probe.style.width=width+'px';probe.style.font=style.font;probe.style.lineHeight=style.lineHeight;probe.style.padding=style.padding;" +
+        "probe.textContent=text&&text.length?text:' ';" +
+        "document.body.appendChild(probe);" +
+        "const line=parseFloat(style.lineHeight)||22;const pad=(parseFloat(style.paddingTop)||0)+(parseFloat(style.paddingBottom)||0);" +
+        "const lines=Math.max(1,Math.round((probe.scrollHeight-pad)/line));probe.remove();return lines;" +
+        "}" +
+        "function semiFit(box){" +
+        "const lines=semiVisualLines(box.value,semiBoxWidth(box),getComputedStyle(box));" +
+        "const shown=Math.min(16,Math.max(1,lines));" +
+        "box.rows=shown;box.dataset.visualLines=String(lines);box.style.overflowY=lines>shown?'auto':'hidden';return lines;" +
+        "}" +
+        "function semiCellAt(text,cellIndex){" +
+        "if(!(cellIndex>=0))return null;const nl=text.indexOf('\\n');const line=nl<0?text:text.slice(0,nl);" +
+        "if(!/^\\s*\\|/.test(line))return null;let seen=-1,start=-1,end=line.length;" +
+        "for(let i=0;i<line.length;i++){if(line[i]==='|'&&(i===0||line[i-1]!=='\\\\')){seen++;if(seen===cellIndex)start=i+1;else if(start>=0){end=i;break;}}}" +
+        "if(start<0)return null;while(start<end&&line[start]===' ')start++;while(end>start&&line[end-1]===' ')end--;return {start:start,end:end};" +
+        "}" +
+        "function semiScrollCaret(box,pos){" +
+        "const style=getComputedStyle(box);const lines=semiVisualLines(box.value.slice(0,pos),semiBoxWidth(box),style);" +
+        "const line=parseFloat(style.lineHeight)||22;box.scrollTop=Math.max(0,(lines-1)*line-box.clientHeight/3);" +
+        "}" +
+        "function semiPlace(box,hint){" +
+        "let pos=0;" +
+        "if(hint&&typeof hint.cell==='number'&&hint.cell>=0){const span=semiCellAt(box.value,hint.cell);if(span)pos=Math.min(span.start+Math.max(0,hint.inner|0),span.end);}" +
+        "else if(hint&&typeof hint.plain==='number'&&hint.plain>=0)pos=Math.max(0,Math.min(hint.plain|0,box.value.length));" +
+        "box.setSelectionRange(pos,pos);semiScrollCaret(box,pos);return pos;" +
+        "}" +
+        "function semiTextOffset(el,x,y){" +
+        "const doc=el.ownerDocument;let node=null,offset=0;" +
+        "if(typeof doc.caretRangeFromPoint==='function'){const range=doc.caretRangeFromPoint(x,y);if(range){node=range.startContainer;offset=range.startOffset;}}" +
+        "else if(typeof doc.caretPositionFromPoint==='function'){const p=doc.caretPositionFromPoint(x,y);if(p){node=p.offsetNode;offset=p.offset;}}" +
+        "if(!node||!el.contains(node))return 0;const pre=doc.createRange();pre.selectNodeContents(el);" +
+        "try{pre.setEnd(node,offset);}catch(err){return 0;}return pre.toString().length;" +
+        "}" +
+        "function semiClickHint(block,target,x,y){" +
+        "const cell=target.closest('td,th');" +
+        "if(cell&&(block===cell||block.contains(cell))){const cells=[...cell.parentElement.children].filter(c=>c.tagName==='TD'||c.tagName==='TH');return {cell:cells.indexOf(cell),inner:semiTextOffset(cell,x,y)};}" +
+        "return {plain:semiTextOffset(block,x,y)};" +
+        "}" +
+        "function semiTableRow(host){" +
+        "if(!host)return null;if(host.tagName==='TR')return host;" +
+        "const inside=host.closest('tr');if(inside)return inside;" +
+        "const table=host.tagName==='TABLE'?host:host.closest('table');if(!table)return null;" +
+        "const line=host.getAttribute('data-src-line');if(!line)return null;" +
+        "return [...table.querySelectorAll('tr')].find(tr=>tr.getAttribute('data-src-line')===line||!!tr.querySelector('[data-src-line=\"'+line+'\"]'))||null;" +
+        "}" +
+        "function semiMount(host,wrap){" +
+        "if(!host){const art=document.querySelector('article.md');if(art)art.insertBefore(wrap,art.querySelector('.semi-add'));return;}" +
+        "const row=semiTableRow(host);" +
+        "if(row){const editorRow=document.createElement('tr');editorRow.className='semi-editor-row';const cell=document.createElement('td');cell.colSpan=Math.max(1,row.cells.length||row.children.length||1);cell.appendChild(wrap);editorRow.appendChild(cell);row.insertAdjacentElement('afterend',editorRow);return;}" +
+        "host.classList.add('semi-host');host.style.display='none';host.insertAdjacentElement('afterend',wrap);" +
+        "}" +
         "function semiOpen(start,end,text){" +
-        "document.querySelectorAll('.semi-editor').forEach(n=>n.remove());" +
-        "document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});" +
-        "const box=document.createElement('textarea');box.className='semi-line';box.value=text==null?'':String(text);" +
-        "box.rows=Math.min(14,Math.max(1,box.value.split('\\n').length));" +
+        "semiClear();" +
+        "const box=document.createElement('textarea');box.className='semi-line';box.value=text==null?'':String(text);box.wrap='soft';" +
         "const wrap=document.createElement('div');wrap.className='semi-editor';wrap.dataset.start=String(start);wrap.dataset.end=String(end);" +
         "wrap.appendChild(box);const tip=document.createElement('div');tip.className='semi-tip';" +
-        "tip.textContent='Enter 새 줄 · Shift+Enter 줄바꿈 · Ctrl+Enter 반영 · Esc 취소';wrap.appendChild(tip);" +
+        "tip.textContent='Enter 새 줄 · Shift+Enter 줄바꿈 · Ctrl+Enter 반영 · Esc 취소 · 긴 글은 칸 안에서 스크롤';wrap.appendChild(tip);" +
         "const host=[...document.querySelectorAll('[data-src-line]')].find(n=>parseInt(n.getAttribute('data-src-line'),10)===start);" +
-        "if(host){host.classList.add('semi-host');host.style.display='none';host.insertAdjacentElement('afterend',wrap);}" +
-        "else{const art=document.querySelector('article.md');if(art)art.insertBefore(wrap,art.querySelector('.semi-add'));}" +
+        "semiMount(host,wrap);" +
         "box.addEventListener('keydown',e=>{" +
         "if(e.key==='Escape'){e.preventDefault();e.stopPropagation();semiCancel();return;}" +
         "if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();e.stopPropagation();semiSend(false);return;}" +
         "if(e.key==='Enter'&&!e.shiftKey&&!e.altKey&&!e.ctrlKey&&box.value.indexOf('\\n')<0){e.preventDefault();e.stopPropagation();semiSend(true);}" +
         "});" +
         "box.addEventListener('blur',()=>{setTimeout(()=>{if(wrap.isConnected&&document.activeElement!==box)semiSend(false);},160);});" +
-        "box.focus();const n=box.value.length;box.setSelectionRange(n,n);" +
+        "semiFit(box);const hint=window.__semiCaret||null;window.__semiCaret=null;box.focus();semiPlace(box,hint);" +
         "}" +
         "function semiCancel(){" +
-        "document.querySelectorAll('.semi-editor').forEach(n=>n.remove());" +
-        "document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});" +
+        "semiClear();" +
         "chrome.webview.postMessage(JSON.stringify({t:'semiCancel'}));" +
         "}" +
         "function semiSend(insert){" +
@@ -5085,7 +5134,7 @@ sealed class FileTab : Panel
         "const box=wrap.querySelector('textarea');" +
         "const start=parseInt(wrap.dataset.start,10)||1;const end=parseInt(wrap.dataset.end,10)||(start+1);" +
         "const append=wrap.dataset.append==='1';const text=box?box.value:'';" +
-        "wrap.remove();document.querySelectorAll('.semi-host').forEach(h=>{h.style.display='';h.classList.remove('semi-host');});" +
+        "semiClear();" +
         "chrome.webview.postMessage(JSON.stringify({t:'semiCommit',start:start,end:end,text:text,insert:!!insert,append:append}));" +
         "}" +
         // 실제 사용자의 일반 왼쪽 클릭만 편집 위치 이동으로 해석한다.
@@ -5098,7 +5147,7 @@ sealed class FileTab : Panel
         "const block=target.closest('[data-src-line]');" +
         "if(document.querySelector('.semi-editor')){if(block){const r=semiRangeOf(block);const wrap=document.querySelector('.semi-editor');if(wrap&&parseInt(wrap.dataset.start,10)===r.start)return;}semiSend(false);return;}" +
         "if(!block){if(target.closest('article.md'))chrome.webview.postMessage(JSON.stringify({t:'semiAppend'}));return;}" +
-        "const range=semiRangeOf(block);chrome.webview.postMessage(JSON.stringify({t:'semiOpen',start:range.start,end:range.end}));return;}" +
+        "const range=semiRangeOf(block);window.__semiCaret=semiClickHint(block,target,e.clientX,e.clientY);chrome.webview.postMessage(JSON.stringify({t:'semiOpen',start:range.start,end:range.end}));return;}" +
         "if(target.closest('a,button,input,select,textarea,summary,[contenteditable]'))return;" +
         "const selection=window.getSelection();if(selection&&!selection.isCollapsed)return;" +
         "const lineBlock=target.closest('[data-src-line]');" +
@@ -5324,6 +5373,7 @@ sealed class FileTab : Panel
         "if(!isMultiCol())return;" +
         "window.__targetColumnIndex=undefined;" +
         "});" +
+        "if(document.body.classList.contains('semi-edit'))ensureSemiAdd();" +
         "</script>";
 
 }

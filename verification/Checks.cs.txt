@@ -252,6 +252,43 @@ internal static class Checks
     static async Task RunWeb()
     {
         await TestAsync("WEB-01", "Preview JavaScript loads", async () => { await Page("# Test\n\nBody"); Equal("function", (await JS("typeof findInPage")).GetString()); });
+        await TestAsync("SEMI-05", "Long semi-edit box shows the clicked part of a wrapped paragraph", async () =>
+        {
+            var paragraph = string.Join(" ", Enumerable.Repeat("아주 긴 문단", 200));
+            await Page(paragraph);
+            var info = await JS("(()=>{window.__semiCaret={plain:4};semiOpen(1,2147483647," + JsonSerializer.Serialize(paragraph) + ");const box=document.querySelector('.semi-line');return {rows:box.rows,pos:box.selectionStart,len:box.value.length,lines:parseInt(box.dataset.visualLines||'0',10)};})()");
+            Require(info.GetProperty("rows").GetInt32() > 1, "Long paragraph stayed on one row");
+            Require(info.GetProperty("lines").GetInt32() > info.GetProperty("rows").GetInt32(), "Long paragraph did not overflow into the editor scroll");
+            Equal(4, info.GetProperty("pos").GetInt32());
+            Require(info.GetProperty("pos").GetInt32() < info.GetProperty("len").GetInt32() - 1, "Caret stayed at the hidden end");
+            var shortInfo = await JS("(()=>{window.__semiCaret=null;semiOpen(1,2,'짧은 줄');const box=document.querySelector('.semi-line');return {rows:box.rows,pos:box.selectionStart};})()");
+            Require(shortInfo.GetProperty("rows").GetInt32() <= 2, "Short line opened too tall");
+            Equal(0, shortInfo.GetProperty("pos").GetInt32());
+        });
+        await TestAsync("SEMI-06", "Very long table cell opens at the clicked cell inside a scrolling editor", async () =>
+        {
+            var cell = new string('가', 3000);
+            var row = "| 앞 | " + cell + " | 뒤 |";
+            await Page("| 머리 | 값 |\n|---|---|\n" + row);
+            var info = await JS("(()=>{window.__semiCaret={cell:1,inner:2};semiOpen(1,2," + JsonSerializer.Serialize(row) + ");const box=document.querySelector('.semi-line');const span=semiCellAt(box.value,1);return {rows:box.rows,pos:box.selectionStart,start:span.start,end:span.end,len:box.value.length,lines:parseInt(box.dataset.visualLines||'0',10)};})()");
+            var start = info.GetProperty("start").GetInt32();
+            var end = info.GetProperty("end").GetInt32();
+            var pos = info.GetProperty("pos").GetInt32();
+            Equal(start + 2, pos);
+            Require(pos < end, "Caret left the clicked cell");
+            Require(info.GetProperty("len").GetInt32() > end, "Row tail missing");
+            Require(info.GetProperty("rows").GetInt32() > 1, "Long cell stayed on one row");
+            Require(info.GetProperty("lines").GetInt32() > info.GetProperty("rows").GetInt32(), "Long cell did not overflow into the editor scroll");
+        });
+        await TestAsync("SEMI-07", "Table semi-edit keeps the clicked row and uses a smaller font", async () =>
+        {
+            await Page("| 이름 | 값 |\n|---|---|\n| 가나다 | 123 |\n| 다음 | 456 |\n");
+            var info = await JS("(()=>{const cell=[...document.querySelectorAll('td')].find(td=>td.textContent.includes('가나다'));const line=parseInt(cell.getAttribute('data-src-line'),10);window.__semiCaret={cell:0,inner:0};semiOpen(line,line+1,'| 가나다 | 123 |');const box=document.querySelector('.semi-line');const editorRow=box.closest('tr');const prev=editorRow&&editorRow.previousElementSibling;const rows=[...document.querySelectorAll('tr')].filter(tr=>!tr.classList.contains('semi-editor-row')&&getComputedStyle(tr).display!=='none');return {font:getComputedStyle(box).fontSize,underRow:!!(editorRow&&editorRow.classList.contains('semi-editor-row')&&prev&&getComputedStyle(prev).display!=='none'&&prev.textContent.includes('가나다')),kept:rows.some(tr=>tr.textContent.includes('가나다'))&&rows.some(tr=>tr.textContent.includes('다음')),inTable:!!box.closest('table')};})()");
+            Equal("14px", info.GetProperty("font").GetString());
+            Require(info.GetProperty("underRow").GetBoolean(), "Editor was not kept directly under the row");
+            Require(info.GetProperty("kept").GetBoolean(), "Table rows were hidden");
+            Require(info.GetProperty("inTable").GetBoolean(), "Editor was placed outside the table");
+        });
         await TestAsync("PREVIEW-INIT-01", "Large document initial preview avoids NavigateToString size failure", async () =>
         {
             var value = new string('가', 2_200_000) + "\n\n초기 미리보기 끝";
@@ -948,10 +985,10 @@ internal static class Checks
         {
             await TestAsync("TOOLBAR-01","Global icon toolbar stays above tabs and has the approved order and tooltips",async()=>
             {
-                Equal("new,open,save,print,undo,redo,mode,width,find,highlight,semi,close",string.Join(",",toolbar.Items.Cast<ToolStripItem>().Where(i=>i is not ToolStripSeparator).Select(i=>i.Name)));
+                Equal("new,open,save,print,undo,redo,mode,width,find,highlight,close",string.Join(",",toolbar.Items.Cast<ToolStripItem>().Where(i=>i is not ToolStripSeparator).Select(i=>i.Name)));
                 Equal(0,toolbar.Top);Require(toolbar.Visible,"Toolbar hidden on home");
                 Require(Button("new").Enabled&&Button("open").Enabled,"Home file commands disabled");
-                foreach(var name in new[]{"save","print","undo","redo","mode","width","semi","find","highlight","close"}) Require(!toolbar.Items[name]!.Enabled,"Home command enabled: "+name);
+                foreach(var name in new[]{"save","print","undo","redo","mode","width","find","highlight","close"}) Require(!toolbar.Items[name]!.Enabled,"Home command enabled: "+name);
                 foreach(ToolStripItem item in toolbar.Items)
                     if(item is not ToolStripSeparator) { Require(item.Image!=null,"Icon missing: "+item.Name);Require(item.DisplayStyle==ToolStripItemDisplayStyle.Image,"Non-icon toolbar item");Require(!string.IsNullOrWhiteSpace(item.ToolTipText)&&!string.IsNullOrWhiteSpace(item.AccessibleName),"Tooltip/accessibility missing"); }
                 File.WriteAllText(path,"# Toolbar test\n\noriginal text");main.OpenFile(path);
@@ -1014,7 +1051,8 @@ internal static class Checks
                 Require(Button("mode").ToolTipText!.StartsWith("VIEW"),"Tab mode tooltip stale");
                 Button("close").PerformClick();Equal(1,main.GetAllTabs().Count);Require(ReferenceEquals(previous,Active()),"Wrong tab restored");
                 var image=Path.Combine(Artifacts,"toolbar-image.png");File.Copy(Path.Combine(Root,"assets","logo.png"),image,true);main.OpenFile(image);
-                Require(!Button("save").Enabled&&!Button("mode").Enabled&&!width.Enabled&&!Button("semi").Enabled&&!Button("find").Enabled&&!Button("highlight").Enabled,"Read-only file exposes text editing commands");
+                Require(!Button("save").Enabled&&!Button("mode").Enabled&&!width.Enabled&&!Button("find").Enabled&&!Button("highlight").Enabled,"Read-only file exposes text editing commands");
+                Require(toolbar.Items.Find("semi",false).Length==0,"Semi-edit button remains");
                 Require(Button("close").Enabled&&Button("print").Enabled,"Read-only document commands disabled");
                 Button("close").PerformClick();Equal(1,main.GetAllTabs().Count);Require(width.Enabled&&Button("save").Enabled,"Text document commands not restored");await Task.CompletedTask;
             });
@@ -1081,17 +1119,13 @@ internal static class Checks
                 Require(!notice.Visible,"Notice stayed visible while owner minimized");
                 main.WindowState=FormWindowState.Normal;
             });
-            await TestAsync("SEMI-04","Semi-edit test button toggles on a text document and stays off for read-only files",async()=>
+            await TestAsync("SEMI-04","Semi-edit is on for a text document, off for a read-only file, and has no toolbar button",async()=>
             {
-                var semi=Button("semi");
-                Require(semi.ToolTipText!.Contains("세미편집"),"Semi-edit tooltip missing");
-                var tab=Active();Require(tab.CanSemiEdit&&!tab.SemiEdit,"Text document did not offer semi-edit");
-                semi.PerformClick();Require(tab.SemiEdit,"Semi-edit button did not turn on");
-                Equal("세미편집",((ToolbarActionNotice)typeof(MainForm).GetField("_actionNotice",Flags)!.GetValue(main)!).Text);
-                semi.PerformClick();Require(!tab.SemiEdit,"Semi-edit button did not turn off");
+                Require(toolbar.Items.Find("semi",false).Length==0,"Semi-edit button remains");
+                var tab=Active();Require(tab.CanSemiEdit&&tab.SemiEdit,"Text document did not open in semi-edit");
                 var image=Path.Combine(Artifacts,"semi-readonly.png");File.Copy(Path.Combine(Root,"assets","logo.png"),image,true);main.OpenFile(image);
-                Require(!Button("semi").Enabled,"Read-only file enabled semi-edit");
-                Button("close").PerformClick();Require(Button("semi").Enabled,"Semi-edit stayed disabled after closing the image");
+                var imageTab=Active();Require(!imageTab.CanSemiEdit&&!imageTab.SemiEdit,"Read-only file enabled semi-edit");
+                Button("close").PerformClick();Require(Active().SemiEdit,"Semi-edit stayed off after closing the image");
                 await Task.CompletedTask;
             });
             await TestAsync("TOOLBAR-10","Action notice stays at the bottom center, clear of toolbar tooltips after resizing",async()=>
