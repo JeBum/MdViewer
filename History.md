@@ -13,6 +13,7 @@ v1.3.9 이후 세미편집을 보기 화면의 기본 동작으로 바꿉니다.
 - 긴 문단은 화면 너비에 맞춰 입력칸이 늘고, 커서는 클릭한 곳에 있다.
 - 표 셀을 열면 그 행은 그대로 두고 바로 아래에 원문 입력칸을 붙인다. 편집 글자는 14px이다.
 - README에 세미편집 화면을 추가한다.
+- GitHub 공개 배포: [v1.3.10 Release](https://github.com/JeBum/MdViewer/releases/tag/v1.3.10)에 `MDviewer.exe` 등록. 태그 소스 `5d42d94`에서 빌드하여 파일 버전 1.3.10.0과 제품 버전의 커밋 일치를 확인. 크기 76,811,344 bytes, SHA256 `E1CA81A3A07C2613100B4B8FE2129FCED49E985213CF37D70151D42BECD6AB1D`. 상세 결과: `verification/GITHUB-RELEASE-RESULTS.md`.
 
 ---
 

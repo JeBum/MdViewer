@@ -1,3 +1,24 @@
+# GitHub Release v1.3.10 게시 검증 — 2026-11-24
+
+- 저장소: `JeBum/MdViewer`.
+- 공개 태그 [v1.3.10](https://github.com/JeBum/MdViewer/releases/tag/v1.3.10)는 소스 커밋 `5d42d94b4c7e6e681ca1a5964d4712f9709a11ab`를 가리킨다.
+- 이 커밋에서 `release.bat`로 빌드한 `publish\MDviewer.exe`를 Release Asset으로 올렸다. draft=false, prerelease=false.
+- [다운로드 — MDviewer.exe](https://github.com/JeBum/MdViewer/releases/download/v1.3.10/MDviewer.exe).
+
+| 확인 항목 | 결과 |
+|---|---|
+| Release 태그 | `v1.3.10` |
+| 태그가 가리키는 커밋 | `5d42d94b4c7e6e681ca1a5964d4712f9709a11ab` |
+| 프로젝트 버전 | `1.3.10` |
+| EXE 파일 버전 | `1.3.10.0` |
+| EXE 제품 버전 | `1.3.10+5d42d94b4c7e6e681ca1a5964d4712f9709a11ab` |
+| 파일 크기 | 76,811,344 bytes |
+| SHA256 | `E1CA81A3A07C2613100B4B8FE2129FCED49E985213CF37D70151D42BECD6AB1D` |
+
+GitHub 자산의 크기와 `sha256` digest가 로컬 파일과 같다. 릴리스 노트는 v1.3.9 이후의 세미편집 기본 켜짐, 긴 문단·표 행 편집, README 화면을 요약했다.
+
+---
+
 # GitHub Release v1.3.9 게시 검증 — 2026-11-24
 
 - 저장소: `JeBum/MdViewer`.
