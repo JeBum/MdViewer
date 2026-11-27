@@ -1,4 +1,4 @@
-param([switch]$CursorOnly, [switch]$NativeOnly, [switch]$EditorOnly, [switch]$PrintOnly, [switch]$ToolbarOnly)
+param([switch]$CursorOnly, [switch]$NativeOnly, [switch]$EditorOnly, [switch]$PrintOnly, [switch]$ToolbarOnly, [switch]$EditingFixesOnly)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $runnerDir = Join-Path $repoRoot 'obj\verification'
@@ -24,7 +24,7 @@ New-Item -ItemType Directory -Force -Path $runnerDir | Out-Null
     <Compile Include="../../PrintLayout.cs" />
     <Compile Include="../../AppToolbar.cs" />
     <Compile Include="../../verification/Checks.cs.txt" />
-    <PackageReference Include="Markdig" Version="0.41.3" />
+    <PackageReference Include="Markdig" Version="1.4.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3351.48" />
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.3.0" />
   </ItemGroup>
@@ -36,5 +36,6 @@ if ($NativeOnly) { $runnerArgs += '--native' }
 if ($EditorOnly) { $runnerArgs += '--editor' }
 if ($PrintOnly) { $runnerArgs += '--print' }
 if ($ToolbarOnly) { $runnerArgs += '--toolbar' }
+if ($EditingFixesOnly) { $runnerArgs += '--editing-fixes' }
 dotnet run --project (Join-Path $runnerDir 'Verification.csproj') -- @runnerArgs
 exit $LASTEXITCODE

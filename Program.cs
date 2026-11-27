@@ -7,6 +7,9 @@
 // 4. 변경 이력은 History.md에 일자별로 상세 기록 유지
 // ==============================================================================================
 // [요건 이력]
+// SYNTAX-01 / 2026-11-26 / 상단 문법 예제 버튼, F1과 메뉴에서 작성 중 참고할 짧은 문법 설명을 보여 준다.
+// EDIT-END-01 / 2026-11-26 / 편집 중 마지막 빈 줄과 마지막 문단도 VIEW 화면에 보이게 따라간다.
+// LIST-01 / 2026-11-26 / 자동 줄바꿈과 무관하게 원본 줄의 목록을 이어 쓰고 Tab 들여쓰기를 두 칸씩 맞춘다.
 // SEMI-01 / 2026-11-24 / VIEW에서 클릭한 블록만 원문으로 고쳐 기존 내용을 수정하고 새 줄을 추가한다.
 // SEMI-05 / 2026-11-24 / 긴 단락과 긴 표 셀은 내용이 보이게 칸을 늘리고 클릭한 곳에 커서를 둔다.
 // SEMI-07 / 2026-11-24 / 편집칸 글자를 한 단계 작게 하고 표 행은 그대로 둔 채 그 행 바로 아래에 연다.
@@ -260,6 +263,13 @@ sealed partial class MainForm : Form, IMessageFilter
 
         KeyDown += (_, e) =>
         {
+            if (e.KeyCode == Keys.F1)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                ShowMarkdownSyntax();
+                return;
+            }
             if (e.Control && e.KeyCode == Keys.P)
             {
                 e.Handled = true;
@@ -528,7 +538,7 @@ sealed partial class MainForm : Form, IMessageFilter
         _licenseInfo.Text =
             "사용 라이선스\n" +
             "MIT: Mermaid.js 11.17.2 · KaTeX 0.16.47 · Open XML SDK 3.3.0\n" +
-            "BSD-2-Clause: Markdig 0.41.3 · Microsoft WebView2 배포 라이선스";
+            "BSD-2-Clause: Markdig 1.4.0 · Microsoft WebView2 배포 라이선스";
         _licenseInfo.AutoSize = true;
         _licenseInfo.BackColor = Color.Transparent;
         _licenseInfo.Anchor = AnchorStyles.Top | AnchorStyles.Left;
@@ -790,6 +800,69 @@ sealed partial class MainForm : Form, IMessageFilter
             MessageBox.Show(this, ex.Message, "연결 등록 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
+    internal const string MarkdownSyntaxExamples = """
+        # 대제목 → 가장 큰 제목
+        ## 중제목 → 두 번째 크기의 제목
+        ### 소제목 → 세 번째 크기의 제목
+
+        **굵은 글씨** → 굵게
+        *기울임* → 기울임
+        ~~취소선~~ → 글자에 취소선
+        ==강조== → 형광펜 강조
+        `코드` → 짧은 코드
+
+        - 항목 → 글머리 목록
+          - 하위 항목 → 앞에 공백 두 칸을 넣어 한 단계 들여쓰기
+        1. 항목 → 번호 목록
+        - [ ] 할 일 → 체크하지 않은 항목
+        - [x] 완료 → 체크한 항목
+        Enter → 같은 깊이의 목록 이어 쓰기, 빈 목록에서 Enter → 목록 끝내기
+        Tab / Shift+Tab → 목록을 두 칸 들여쓰기 / 내어쓰기
+
+        > 인용문 → 인용 블록
+        [설명](https://example.com) → 링크
+        ![설명](images/photo.png) → 이미지
+        --- → 가로 구분선
+
+        | 이름 | 값 |
+        | --- | --- |
+        | 항목 | 내용 |
+        → 표 (제목 행 아래에 구분 행 필요)
+
+        ```csharp
+        Console.WriteLine("Hello");
+        ```
+        → 여러 줄 코드 블록
+
+        $x^2$ → 수식
+        \- → 하이픈 문자 그대로 표시
+        줄 끝 공백 두 칸 + Enter → 같은 문단에서 줄바꿈
+        빈 줄 → 문단 나누기
+        """;
+
+    void ShowMarkdownSyntax()
+    {
+        using var dialog = new Form
+        {
+            Text = "마크다운 문법 예제", StartPosition = FormStartPosition.CenterParent,
+            Size = new Size(680, 700), MinimumSize = new Size(420, 300),
+            BackColor = Brand.Wash, ForeColor = Brand.Ink, KeyPreview = true,
+            MinimizeBox = false, ShowInTaskbar = false
+        };
+        var examples = new TextBox
+        {
+            Name = "markdownSyntaxExamples", Multiline = true, ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill,
+            Font = Brand.Editor(11f), BackColor = Brand.Wash, ForeColor = Brand.Ink,
+            Text = MarkdownSyntaxExamples.Replace("\r\n", "\n").Replace("\n", Environment.NewLine),
+            BorderStyle = BorderStyle.None, Margin = new Padding(16)
+        };
+        dialog.Padding = new Padding(16);
+        dialog.Controls.Add(examples);
+        dialog.KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) dialog.Close(); };
+        dialog.ShowDialog(this);
+    }
+
     void BuildMenu()
     {
         _menu.Renderer = new SogangMenuRenderer();
@@ -797,6 +870,7 @@ sealed partial class MainForm : Form, IMessageFilter
         _menu.ImageScalingSize = new Size(12, 12);
         _menu.Font = Brand.MenuFont;
         _menu.FontChanged += (_, _) => ApplyMenuFont();
+        _menu.Items.Add("마크다운 문법 예제 (F1)", null, (_, _) => ShowMarkdownSyntax());
         _menu.Items.Add("New", null, (_, _) => NewFile());
         _menu.Items.Add("Open", null, (_, _) => OpenDialog());
         _miSave = new ToolStripMenuItem("Save", null, (_, _) => Current?.Save());
@@ -1627,12 +1701,17 @@ sealed class FileTab : Panel
     readonly WebView2 _web2 = new() { Dock = DockStyle.Fill, AllowExternalDrop = true };
     readonly FileSystemWatcher _watch = new();
     readonly System.Windows.Forms.Timer _previewTick = new() { Interval = 120 };
-    readonly MarkdownPipeline _md = new MarkdownPipelineBuilder()
-        .UseAdvancedExtensions()
-        .UseYamlFrontMatter()
-        .UsePipeTables()
-        .UseGridTables()
-        .Build();
+    static readonly MarkdownPipeline _md = CreateMarkdownPipeline(useGfmTables: false);
+    static readonly Lazy<MarkdownPipeline> _largeTableMarkdown = new(() => CreateMarkdownPipeline(useGfmTables: true));
+
+    static MarkdownPipeline CreateMarkdownPipeline(bool useGfmTables)
+    {
+        var builder = new MarkdownPipelineBuilder()
+            .UseAdvancedExtensions()
+            .UseYamlFrontMatter();
+        builder.Extensions.Find<PipeTableExtension>()!.Options.UseGfmRules = useGfmTables;
+        return builder.Build();
+    }
 
     bool _editMode;
     bool _suppressPreviewRefresh;
@@ -1783,6 +1862,7 @@ sealed class FileTab : Panel
                         for (var attempt = 0; attempt < 16; attempt++)
                         {
                             await Task.Delay(attempt == 0 ? 120 : 200);
+                            if (!_preserveViewScrollOnEditEntry) break;
                             await _web.ExecuteScriptAsync("if(typeof window.__mdEditScrollY==='number')window.scrollTo(0,window.__mdEditScrollY);");
                         }
                         await _web.ExecuteScriptAsync("window.__mdPreserveEditScroll=false;");
@@ -2059,6 +2139,12 @@ sealed class FileTab : Panel
             _gutter.Invalidate();
             if (!_suppressPreviewRefresh)
             {
+                if (_editMode && _text.Focused)
+                {
+                    _preserveViewScrollOnEditEntry = false;
+                    if (_web.CoreWebView2 != null)
+                        _ = _web.ExecuteScriptAsync("window.__mdPreserveEditScroll=false;");
+                }
                 _previewTick.Stop();
                 _previewTick.Start();
             }
@@ -2812,6 +2898,12 @@ sealed class FileTab : Panel
     void SyncEditorToWeb()
     {
         if (_syncing || _preserveViewScrollOnEditEntry || !_ready || !_editMode || _web.CoreWebView2 == null) return;
+        var caretPosition = _text.GetPositionFromCharIndex(_text.SelectionStart);
+        if (_text.SelectionStart == _text.TextLength && caretPosition.Y >= 0 && caretPosition.Y < _text.ClientSize.Height)
+        {
+            SyncCursorToWeb();
+            return;
+        }
         _syncing = true;
         try
         {
@@ -3030,12 +3122,10 @@ sealed class FileTab : Panel
     bool TryContinueList()
     {
         var caret = _text.SelectionStart;
-        var lineIndex = _text.GetLineFromCharIndex(caret);
-        var lineStart = _text.GetFirstCharIndexFromLine(lineIndex);
-        if (lineStart < 0) return false;
-        var lineEnd = lineIndex + 1 < _text.Lines.Length
-            ? _text.GetFirstCharIndexFromLine(lineIndex + 1)
-            : _text.TextLength;
+        if (_text.SelectionLength != 0) return false;
+        var lineIndex = GetLogicalLine(_text.Text, caret);
+        var lineStart = GetCharIndexOfLogicalLine(_text.Text, lineIndex);
+        var lineEnd = GetCharIndexOfLogicalLine(_text.Text, lineIndex + 1);
         var line = _text.Text.Substring(lineStart, Math.Max(0, lineEnd - lineStart)).TrimEnd('\r', '\n');
         if (caret < lineStart + line.Length) return false;
 
@@ -3069,20 +3159,17 @@ sealed class FileTab : Panel
     {
         if (_text.SelectionLength != 0) return false;
         var caret = _text.SelectionStart;
-        var lineIndex = _text.GetLineFromCharIndex(caret);
-        var lineStart = _text.GetFirstCharIndexFromLine(lineIndex);
-        if (lineStart < 0) return false;
-        var lineEnd = lineIndex + 1 < _text.Lines.Length
-            ? _text.GetFirstCharIndexFromLine(lineIndex + 1)
-            : _text.TextLength;
+        var lineIndex = GetLogicalLine(_text.Text, caret);
+        var lineStart = GetCharIndexOfLogicalLine(_text.Text, lineIndex);
+        var lineEnd = GetCharIndexOfLogicalLine(_text.Text, lineIndex + 1);
         var line = _text.Text.Substring(lineStart, Math.Max(0, lineEnd - lineStart)).TrimEnd('\r', '\n');
         if (!Regex.IsMatch(line, @"^\s*(?:[-+*]|\d+[.)])\s+")) return false;
 
         if (outdent)
         {
             var remove = line.StartsWith("\t", StringComparison.Ordinal) ? 1 :
-                line.StartsWith("    ", StringComparison.Ordinal) ? 4 :
-                line.StartsWith("  ", StringComparison.Ordinal) ? 2 : 0;
+                line.StartsWith("  ", StringComparison.Ordinal) ? 2 :
+                line.StartsWith(" ", StringComparison.Ordinal) ? 1 : 0;
             if (remove == 0) return false;
             _text.Select(lineStart, remove);
             _text.SelectedText = "";
@@ -4297,11 +4384,22 @@ sealed class FileTab : Panel
     string RenderHtml(string src)
     {
         var norm = NormalizeMd(src);
-        var document = Markdown.Parse(norm, _md);
+        var pipeline = _md;
+        MarkdownDocument document;
+        try
+        {
+            document = Markdown.Parse(norm, pipeline);
+        }
+        catch (ArgumentException ex) when (ex.Message.Contains("depth limit exceeded", StringComparison.Ordinal))
+        {
+            // 깊이 제한에 걸린 대형 파이프 표를 GFM 규칙으로 다시 파싱해 모든 행을 표시한다.
+            pipeline = _largeTableMarkdown.Value;
+            document = Markdown.Parse(norm, pipeline);
+        }
         AttachSrcLines(document);
         var writer = new StringWriter();
         var renderer = new HtmlRenderer(writer);
-        _md.Setup(renderer);
+        pipeline.Setup(renderer);
         renderer.Render(document);
         var html = writer.ToString();
         html = RenderCallouts(html);
@@ -4902,6 +5000,7 @@ sealed class FileTab : Panel
         "const prevLn=parseInt(prev.getAttribute('data-src-line'),10);" +
         "const prevY=prev.getBoundingClientRect().top+window.scrollY;" +
         "if(!next){" +
+        "if(n>=totalLines)return docH;" +
         "if(totalLines<=prevLn)return Math.min(prevY,maxScroll);" +
         "const ratio=Math.min(1,Math.max(0,n-prevLn)/Math.max(1,totalLines-prevLn));" +
         "const prevH=prev.offsetHeight||30;" +

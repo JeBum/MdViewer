@@ -99,10 +99,11 @@ internal static class Checks
                 if(args.Contains("--native")) { await RunThemeDirtyState(); await RunHomeSample(); await RunTextAndLargeFile(); return; }
                 Tab = new FileTab(null);
                 Editor = Field<RichTextBox>("_text");
-                if (!cursorOnly && !args.Contains("--print") && !args.Contains("--toolbar")) RunLogic();
+                if (!cursorOnly && !args.Contains("--print") && !args.Contains("--toolbar") && !args.Contains("--editing-fixes")) RunLogic();
                 Host.Controls.Add(Tab);
                 Web = Field<WebView2>("_web");
                 await Wait(() => Task.FromResult(Field<bool>("_ready")), 20000);
+                if(args.Contains("--editing-fixes")){await RunEditingFixes();return;}
                 if(args.Contains("--toolbar")){await RunToolbar();await RunLayoutPrinting();await RunHomeThemeLine();return;}
                 if(args.Contains("--print")){await RunWindowSizeKeep();await RunDocWidthMode();await RunTableWrap();await RunPrinting();await RunLayoutPrinting();await RunHomeSample();return;}
                 if(args.Contains("--editor")){await RunEditorIsolation();return;}
@@ -126,6 +127,7 @@ internal static class Checks
         await RunHomeThemeLine();
         await RunAssociationDialogColors();
                 await RunEditorIsolation();
+                await RunEditingFixes();
             }
             catch (Exception e) { Record("ENV", "Integration environment", "BLOCKED", e.ToString()); }
             finally
@@ -172,7 +174,7 @@ internal static class Checks
             Require(h.Contains("<table"), "No table");
             Require(h.Contains("footnote text"), "No footnote text");
             var src = "|A|B|\n|-|-|\n|1|2|\nend";
-            for (int i = 0; i < 5; i++) Equal(i, (int)Call("FromNormLine", src, (int)Call("ToNormLine", src, i)!)!);
+            for (int i = 0; i < src.Split('\n').Length; i++) Equal(i, (int)Call("FromNormLine", src, (int)Call("ToNormLine", src, i)!)!);
             var testPath = Path.Combine(Root, ".test", "20261004_XGBoost_LSTM_학습결과분석_보고서.md");
             if (File.Exists(testPath))
             {
@@ -182,6 +184,20 @@ internal static class Checks
             }
         });
         Test("MD-02", "Table without preceding blank line", () => Require(Render("intro\n| A | B |\n|---|---|\n| 1 | 2 |").Contains("<table"), "No table"));
+        Test("MD-07", "Large pipe table renders every row and preserves source lines", () =>
+        {
+            const int rowCount = 13000;
+            var rows = Enumerable.Range(1, rowCount)
+                .Select(i => $"| {i} | data/session_{i}_fault.csv | **fault** | 0 | 1 | 2 | 3 | 4 | 5 |");
+            var src = "| Row | Path | Label | A | B | C | D | E | F |\n" +
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n" +
+                string.Join("\n", rows) + "\n# After table";
+            var html = Render(src);
+            Equal(1, System.Text.RegularExpressions.Regex.Matches(html, @"<table\b").Count);
+            Equal(rowCount + 1, System.Text.RegularExpressions.Regex.Matches(html, @"<tr\b").Count);
+            Require(html.Contains("data/session_13000_fault.csv") && html.Contains("<strong>fault</strong>"), "Table content missing");
+            Require(html.Contains($"data-src-line=\"{rowCount + 4}\"") && html.Contains("After table</h1>"), "Heading or source line after the table missing");
+        });
         Test("MD-03", "Source-line mapping survives table normalization", () => { var src = "intro\n|A|B|\n|-|-|\n|1|2|\n\nend"; for (int i = 0; i < 6; i++) Equal(i, (int)Call("FromNormLine", src, (int)Call("ToNormLine", src, i)!)!); });
         Test("MD-04", "Frontmatter excluded from preview", () => { var h = Render("---\ntitle: secretmetadata\n---\n\nBody"); Require(!h.Contains("secretmetadata") && h.Contains("Body"), h); });
         Test("MD-05", "Footnote reference definition and backlink", () => { var h = Render("text[^a]\n\n[^a]: note"); Require(h.Contains("footnote-ref") && h.Contains("href=\"#fnref:1\"") && h.Contains("note"), h); });
@@ -985,19 +1001,19 @@ internal static class Checks
         {
             await TestAsync("TOOLBAR-01","Global icon toolbar stays above tabs and has the approved order and tooltips",async()=>
             {
-                Equal("new,open,save,print,undo,redo,mode,width,find,highlight,close",string.Join(",",toolbar.Items.Cast<ToolStripItem>().Where(i=>i is not ToolStripSeparator).Select(i=>i.Name)));
+                Equal("new,open,save,print,undo,redo,mode,width,find,highlight,syntax,close",string.Join(",",toolbar.Items.Cast<ToolStripItem>().Where(i=>i is not ToolStripSeparator).Select(i=>i.Name)));
                 Equal(0,toolbar.Top);Require(toolbar.Visible,"Toolbar hidden on home");
                 Require(Button("new").Enabled&&Button("open").Enabled,"Home file commands disabled");
                 foreach(var name in new[]{"save","print","undo","redo","mode","width","find","highlight","close"}) Require(!toolbar.Items[name]!.Enabled,"Home command enabled: "+name);
                 foreach(ToolStripItem item in toolbar.Items)
-                    if(item is not ToolStripSeparator) { Require(item.Image!=null,"Icon missing: "+item.Name);Require(item.DisplayStyle==ToolStripItemDisplayStyle.Image,"Non-icon toolbar item");Require(!string.IsNullOrWhiteSpace(item.ToolTipText)&&!string.IsNullOrWhiteSpace(item.AccessibleName),"Tooltip/accessibility missing"); }
+                    if(item is not ToolStripSeparator) { Require(item.Image!=null,"Icon missing: "+item.Name);Require(item.DisplayStyle==(item.Name=="syntax"?ToolStripItemDisplayStyle.ImageAndText:ToolStripItemDisplayStyle.Image),"Unexpected toolbar display style");Require(!string.IsNullOrWhiteSpace(item.ToolTipText)&&!string.IsNullOrWhiteSpace(item.AccessibleName),"Tooltip/accessibility missing"); }
                 File.WriteAllText(path,"# Toolbar test\n\noriginal text");main.OpenFile(path);
                 var tabs=(TabControl)typeof(MainForm).GetField("_tabs",Flags)!.GetValue(main)!;
                 Require(tabs.Top>=toolbar.Bottom,"Toolbar overlaps document tabs");
                 Equal(ToolStripItemAlignment.Right,Button("close").Alignment);
                 Require(typeof(FileTab).GetField("_viewTools",Flags)==null,"Old document width bar remains");
                 main.Size=new Size(520,500);await Task.Delay(100);
-                foreach(var name in new[]{"new","open","mode","width","find","highlight","close"}) Require(toolbar.Items[name]!.Placement==ToolStripItemPlacement.Main,"Required command overflows at minimum width: "+name);
+                foreach(var name in new[]{"new","open","mode","width","find","highlight","syntax","close"}) Require(toolbar.Items[name]!.Placement==ToolStripItemPlacement.Main,"Required command overflows at minimum width: "+name);
                 main.Size=new Size(1100,780);
             });
             await TestAsync("TOOLBAR-02","Width split button cycles all three modes and menu matches current mode",async()=>
@@ -1573,6 +1589,112 @@ internal static class Checks
         finally { graphics.ReleaseHdc(dc); }
         return bitmap;
     }
+    static async Task RunEditingFixes()
+    {
+        Test("SYNTAX-01", "Menu opens a readable syntax example dialog", () =>
+        {
+            using var main = new MainForm(Array.Empty<string>());
+            var item = main.ContextMenuStrip!.Items.Cast<ToolStripItem>().Single(i => i.Text == "마크다운 문법 예제 (F1)");
+            bool inspected = false;
+            string failure = "";
+            using var timer = new System.Windows.Forms.Timer { Interval = 100 };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f.Text == "마크다운 문법 예제");
+                if (dialog == null) return;
+                timer.Stop();
+                try
+                {
+                    var box = dialog.Controls.OfType<TextBox>().Single();
+                    Require(box.ReadOnly && box.Text.Contains("# 대제목") && box.Text.Contains("Tab / Shift+Tab") && box.Text.Contains("| --- | --- |"), "Syntax examples missing");
+                    inspected = true;
+                }
+                catch (Exception e) { failure = e.Message; }
+                finally { dialog.Close(); }
+            };
+            timer.Start();
+            item.PerformClick();
+            Require(inspected, failure);
+            inspected = false;
+            timer.Start();
+            var key = new KeyEventArgs(Keys.F1);
+            typeof(Control).GetMethod("OnKeyDown", Flags)!.Invoke(main, new object[] { key });
+            Require(inspected && key.Handled && key.SuppressKeyPress, "F1 did not open syntax examples");
+            inspected = false;
+            timer.Start();
+            var toolbar = (ToolStrip)typeof(MainForm).GetField("_toolbar", Flags)!.GetValue(main)!;
+            Require(toolbar.Items["syntax"]!.Enabled && toolbar.Items["syntax"]!.Text == "문법 예제", "Syntax button missing");
+            toolbar.Items["syntax"]!.PerformClick();
+            Require(inspected, "Toolbar button did not open syntax examples");
+        });
+        SetField("_editMode", true);
+        Editor.ReadOnly = false;
+        Test("LIST-01", "Wrapped typed and automatically continued Korean bullets have equal depth", () =>
+        {
+            var first = "  - 제조사가 자체평가 기술문서(Anex VII)작성 " + string.Join(" ", Enumerable.Repeat("기술문서", 80));
+            Text(first);
+            Require(Editor.GetLineFromCharIndex(Editor.TextLength) > 0, "Wrap precondition missing");
+            Key(Keys.Enter);
+            Equal(first + "\n  - ", Editor.Text.Replace("\r\n", "\n"));
+            Editor.SelectedText = "CE 마킹 부착, NB번호없음, DoC작성보관";
+            var html = Render(Editor.Text);
+            Equal(1, Regex.Matches(html, "<ul").Count);
+            Equal(2, Regex.Matches(html, "<li").Count);
+            Key(Keys.Tab);
+            Require(Editor.Text.Split('\n')[^1].StartsWith("    - "), "Tab failed on logical line");
+            Key(Keys.Shift | Keys.Tab);
+            Require(Editor.Text.Split('\n')[^1].StartsWith("  - "), "Shift+Tab did not restore depth");
+            Equal(1, Regex.Matches(Render(Editor.Text), "<ul").Count);
+        });
+        Test("LIST-02", "Four-space list indents and outdents by one two-space level", () =>
+        {
+            Text("    - first");
+            Key(Keys.Tab); Equal("      - first", Editor.Text);
+            Key(Keys.Shift | Keys.Tab); Equal("    - first", Editor.Text);
+            Key(Keys.Shift | Keys.Tab); Equal("  - first", Editor.Text);
+        });
+        Test("LIST-03", "Wrapped ordered list continues and an empty bullet exits", () =>
+        {
+            Text("9. " + string.Join(" ", Enumerable.Repeat("wrapped", 100)));
+            Key(Keys.Enter); Require(Editor.Text.EndsWith("\n10. "), "Ordered list not continued");
+            Text("  - "); Key(Keys.Enter);
+            Equal("  \n", Editor.Text.Replace("\r\n", "\n"));
+        });
+        Test("LIST-04", "Escaped hyphen stays literal and selected text is not consumed", () =>
+        {
+            Text("\\- literal"); Require(!(bool)Call("TryContinueList")!, "Escaped hyphen continued");
+            Text("- first"); Editor.Select(2, 5);
+            Require(!(bool)Call("TryContinueList")!, "Selection consumed");
+        });
+        SetField("_editMode", false);
+        Editor.ReadOnly = true;
+        await TestAsync("EDIT-END-01", "Cursor at final blank line reveals the bottom after preview refresh", async () =>
+        {
+            var source = string.Join("\n\n", Enumerable.Range(1, 80).Select(i => $"## Section {i}\n\nParagraph {i}")) + "\n\n";
+            await Page(source);
+            var total = FileTab.CountLogicalLines(source);
+            await JS($"(scrollToCursorLine({total},{total}),true)");
+            Require((await JS("window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-2")).GetBoolean(), "Blank end line did not reveal bottom");
+            var json = JsonSerializer.Serialize(Render(source + "Last typed text"));
+            await JS($"(updatePreviewContent({json},{total},{total}),true)");
+            Require((await JS("(()=>{const r=[...document.querySelectorAll('p')].at(-1).getBoundingClientRect();return r.top>=0&&r.bottom<=window.innerHeight;})()")).GetBoolean(), "Typed final paragraph outside viewport");
+        });
+        await TestAsync("EDIT-END-02", "Editor viewport sync keeps the last line visible", async () =>
+        {
+            Tab.EditMode = true;
+            await Task.Delay(3500);
+            var source = string.Join("\n\n", Enumerable.Range(1, 80).Select(i => $"## Heading {i}\n\nText {i}")) + "\n\n";
+            Text(source);
+            Editor.ScrollToCaret();
+            Tab.RefreshPreview();
+            await Task.Delay(300);
+            await JS("(window.scrollTo(0,0),true)");
+            Call("SyncEditorToWeb");
+            await Wait(async () => (await JS("window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-2")).GetBoolean());
+            Tab.EditMode = false;
+        });
+    }
+
     static async Task RunEditorIsolation()
     {
         await TestAsync("GEOMETRY-01", "Native text baseline includes mixed Korean line metrics", async () =>

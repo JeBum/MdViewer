@@ -29,3 +29,15 @@ VIEW의 scroll 이벤트는 80ms 잠금이 풀린 뒤 현재 문서 위치를 �
 `951A64BE4C53530E5DE967ADED92E368340467EE10AE6D2A6EBD70333CB04B36`
 
 앞으로 기능 검증 절차는 `TEST-CASES.md`와 `Checks.cs.txt`에 기록한다. 기존 샘플 파일에 테스트 케이스를 추가하거나 내용을 정리하지 않았다.
+
+## 2026-11-26 문법 예제와 마지막 줄·목록 편집
+
+상단 문법 예제 버튼, F1, 메뉴에서 읽기 전용 문법 안내를 연다. 긴 목록의 Enter와 Tab은 원본 줄을 기준으로 처리하며 Shift+Tab은 공백 두 칸을 제거한다. 마지막 빈 줄과 마지막 문단의 VIEW 스크롤을 문서 끝까지 이동하고, 편집 진입 직후 실제 입력이 시작되면 진입 전 스크롤 보호를 해제한다.
+
+- 최종 기능 검사 `obj/verification/editing-fixes.log` — 7개 통과, 실패 0개.
+- 최종 툴바 검사 `obj/verification/syntax-toolbar.log` — 16개 통과, 실패 0개. 작은 창에서 문법 버튼의 표시와 메뉴·F1·툴바 버튼의 대화상자 열기를 확인했다.
+- 확장 커서 검사 `obj/verification/editing-cursor-regression.log` — 90개 통과, 4개 실패. 실패 항목은 SCROLL-01, HOME-04, GEOMETRY-02, VIEW-CLICK-01이다. 상단 문법 버튼을 추가하기 전 실행한 검사다.
+- 실제 WinForms 컨트롤과 WebView2에서 검증했다. 목록 키 입력은 컨트롤 KeyDown 이벤트 호출로 검사했다.
+- `RELEASE.BAT` 종료 코드 0. 결과는 `publish/MDviewer.exe`, 76,766,264 bytes, 파일 버전 1.3.10.0.
+- SHA256 `54792D2927AC292D412A8036E86078A3A5A6204E6B3AAA4B6F53F7E9EE6A775D`.
+- 빌드에는 WindowsBase 참조 충돌 경고 MSB3277이 남아 있다.

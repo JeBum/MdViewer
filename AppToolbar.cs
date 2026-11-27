@@ -84,12 +84,17 @@ sealed partial class MainForm
         {
             if (Current is { } tab) tab.HighlightBarVisible = !tab.HighlightBarVisible;
         });
+        var syntax = Add("syntax", "마크다운 문법 예제 (F1)", "help", ShowMarkdownSyntax);
+        syntax.Text = "문법 예제";
+        syntax.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+        syntax.Size = new Size(106, 36);
+        syntax.Overflow = ToolStripItemOverflow.Never;
         var close = Add("close", "현재 문서 닫기 (Ctrl+W)", "close", CloseCurrent);
         close.Alignment = ToolStripItemAlignment.Right;
         close.Overflow = ToolStripItemOverflow.Never;
         DpiChanged += (_, _) => SyncToolbar();
         LocationChanged += (_, _) => PositionToolbarNotice();
-        SizeChanged += (_, _) => PositionToolbarNotice();
+        SizeChanged += (_, _) => { SyncToolbar(); PositionToolbarNotice(); };
         VisibleChanged += (_, _) => { if (!Visible) _actionNotice.HideNotice(); };
         Disposed += (_, _) =>
         {
@@ -111,6 +116,7 @@ sealed partial class MainForm
         "width" => Brand.DocWidthMode switch { DocumentWidthMode.Standard => "기본 폭 (46rem)", DocumentWidthMode.Wide => "넓게 (70rem)", _ => "창 맞춤" },
         "find" => Current?.FindBarVisible == true ? "검색" : "검색 닫기",
         "highlight" => Current?.HighlightBarVisible == true ? "키워드 강조" : "키워드 강조 닫기",
+        "syntax" => "마크다운 문법 예제",
         "close" => "현재 문서 닫기",
         _ => ""
     };
@@ -177,6 +183,13 @@ sealed partial class MainForm
         }
         State("find", text, tab?.FindBarVisible == true, "search");
         State("highlight", text, tab?.HighlightBarVisible == true, "highlight");
+        State("syntax", true, icon: "help");
+        bool compact = ClientSize.Width < 640;
+        var syntax = _toolbar.Items["syntax"]!;
+        syntax.DisplayStyle = compact ? ToolStripItemDisplayStyle.Image : ToolStripItemDisplayStyle.ImageAndText;
+        syntax.Size = new Size(compact ? 36 : 106, 36);
+        foreach (var name in new[] { "save", "print" })
+            _toolbar.Items[name]!.Overflow = compact ? ToolStripItemOverflow.Always : ToolStripItemOverflow.AsNeeded;
         State("close", document, icon: "close");
         _toolbar.Invalidate();
     }
@@ -348,6 +361,10 @@ static class DocumentToolbarIcons
             case "highlight":
                 L(6,15,16,5); L(16,5,21,10); L(21,10,11,20); L(11,20,6,15); L(8,17,5,20); L(5,20,10,20); L(13,8,18,13);
                 using (var yellow = new Pen(Color.FromArgb(215,169,0),2.8f)) g.DrawLine(yellow,3,23,21,23); break;
+            case "help":
+                g.DrawEllipse(pen,2,2,20,20);
+                g.DrawArc(pen,8,6,8,7,180,270);
+                L(12,13,12,15); L(12,18,12,18.5f); break;
             case "close": Page(); L(9,12,15,18); L(15,12,9,18); break;
             default: throw new ArgumentException("Unknown toolbar icon", nameof(kind));
         }
