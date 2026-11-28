@@ -1967,6 +1967,26 @@ internal static class Checks
             Require(!Tab.EditMode,"Click enabled editing in VIEW mode");
             Equal(before.start,Editor.SelectionStart);Equal(before.length,Editor.SelectionLength);
         });
+        await TestAsync("SEMI-09","Dragging to select text in VIEW does not open semi-edit, a plain click still does",async()=>
+        {
+            const string value="드래그로 선택해서 복사할 수 있는 충분히 긴 문장입니다 드래그로 선택해서 복사할 수 있는 충분히 긴 문장입니다";
+            Tab.EditMode=false;Text(value);await Page(value);
+            await JS("(semiOn(true),true)");await Task.Delay(120);
+            await JS("(()=>{window.__lastTrustedClick=false;document.addEventListener('click',ev=>window.__lastTrustedClick=ev.isTrusted,{once:true,capture:true});window.getSelection().removeAllRanges();return true;})()");
+            var r=await JS("(()=>{const b=document.querySelector('.md p').getBoundingClientRect();return {x:b.left,y:b.top+b.height/2,w:b.width};})()");
+            double x=r.GetProperty("x").GetDouble(),y=r.GetProperty("y").GetDouble(),w=r.GetProperty("w").GetDouble();
+            Web.Focus();
+            async Task Mouse(string type,double px)=>await Web.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchMouseEvent",JsonSerializer.Serialize(new {type,x=px,y,button="left",clickCount=1}));
+            await Mouse("mousePressed",x+4);await Mouse("mouseMoved",x+Math.Min(150,w/2));await Mouse("mouseReleased",x+Math.Min(150,w/2));
+            await Wait(async()=>(await JS("window.__lastTrustedClick===true")).GetBoolean());await Task.Delay(250);
+            Require((await JS("String(window.getSelection()).length>0")).GetBoolean(),"Drag did not select text");
+            Require(!(await JS("!!document.querySelector('.semi-editor')")).GetBoolean(),"Drag selection opened semi-edit");
+            await JS("(()=>{window.getSelection().removeAllRanges();window.__lastTrustedClick=false;document.addEventListener('click',ev=>window.__lastTrustedClick=ev.isTrusted,{once:true,capture:true});return true;})()");
+            await Mouse("mousePressed",x+4);await Mouse("mouseReleased",x+4);
+            await Wait(async()=>(await JS("window.__lastTrustedClick===true")).GetBoolean());await Task.Delay(250);
+            Require((await JS("!!document.querySelector('.semi-editor')")).GetBoolean(),"Plain click no longer opens semi-edit");
+            await JS("(semiClear(),true)");
+        });
         Tab.EditMode=false;
     }
 

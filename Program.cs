@@ -7,6 +7,7 @@
 // 4. 변경 이력은 History.md에 일자별로 상세 기록 유지
 // ==============================================================================================
 // [요건 이력]
+// SEMI-09 / 2026-11-28 / VIEW에서 드래그로 글자를 선택하면 복사 의도이므로 세미편집을 열지 않는다.
 // SYNTAX-01 / 2026-11-26 / 상단 문법 예제 버튼, F1과 메뉴에서 작성 중 참고할 짧은 문법 설명을 보여 준다.
 // EDIT-END-01 / 2026-11-26 / 편집 중 마지막 빈 줄과 마지막 문단도 VIEW 화면에 보이게 따라간다.
 // LIST-01 / 2026-11-26 / 자동 줄바꿈과 무관하게 원본 줄의 목록을 이어 쓰고 Tab 들여쓰기를 두 칸씩 맞춘다.
@@ -5243,6 +5244,8 @@ sealed class FileTab : Panel
         "const target=e.target instanceof Element?e.target:null;if(!target)return;" +
         "if(document.body.classList.contains('semi-edit')){" +
         "if(target.closest('.semi-editor,.semi-add,a,button,input,select,summary'))return;" +
+        // SEMI-09: 드래그로 글자를 선택한 경우는 복사 의도이므로 세미편집을 열지 않는다.
+        "const dragSel=window.getSelection();if(dragSel&&!dragSel.isCollapsed&&String(dragSel).length>0)return;" +
         "const block=target.closest('[data-src-line]');" +
         "if(document.querySelector('.semi-editor')){if(block){const r=semiRangeOf(block);const wrap=document.querySelector('.semi-editor');if(wrap&&parseInt(wrap.dataset.start,10)===r.start)return;}semiSend(false);return;}" +
         "if(!block){if(target.closest('article.md'))chrome.webview.postMessage(JSON.stringify({t:'semiAppend'}));return;}" +
